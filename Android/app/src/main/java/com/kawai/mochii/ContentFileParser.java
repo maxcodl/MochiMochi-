@@ -5,7 +5,7 @@
  * This source code is licensed under the BSD-style license found in the
  * LICENSE file in the root directory of this source tree.
  */
-package com.kawai.mochii;
+package com.kawai.mochi;
 
 import android.text.TextUtils;
 import android.util.JsonReader;

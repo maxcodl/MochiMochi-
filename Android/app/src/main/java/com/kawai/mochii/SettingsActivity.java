@@ -1,4 +1,4 @@
-package com.kawai.mochii;
+package com.kawai.mochi;
 
 import android.content.Context;
 import android.content.Intent;
@@ -37,7 +37,7 @@ public class SettingsActivity extends BaseActivity {
 
     private TextView currentFolderText;
     private ActivityResultLauncher<Intent> folderPickerLauncher;
-    private static final String GITHUB_URL = "https://github.com/maxculen/Mochii-Stickere";
+    private static final String GITHUB_URL = "http://github.com/maxcodl/MochiMochi/";
     private static final ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 

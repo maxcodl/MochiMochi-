@@ -6,7 +6,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-package com.kawai.mochii;
+package com.kawai.mochi;
 
 import android.view.View;
 

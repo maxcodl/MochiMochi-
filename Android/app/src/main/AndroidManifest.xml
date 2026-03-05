@@ -49,7 +49,7 @@
             tools:ignore="UnusedAttribute">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
-                android:value="com.kawai.mochii.StickerPackListActivity" />
+                android:value="com.kawai.mochi.StickerPackListActivity" />
         </activity>
         <activity
             android:name=".StickerPackInfoActivity"
@@ -59,7 +59,7 @@
             tools:ignore="UnusedAttribute">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
-                android:value="com.kawai.mochii.StickerPackDetailsActivity" />
+                android:value="com.kawai.mochi.StickerPackDetailsActivity" />
         </activity>
         <activity
             android:name=".SettingsActivity"

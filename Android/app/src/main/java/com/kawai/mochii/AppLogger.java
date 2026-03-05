@@ -1,4 +1,4 @@
-package com.kawai.mochii;
+package com.kawai.mochi;
 
 import java.util.ArrayDeque;
 import java.util.Deque;

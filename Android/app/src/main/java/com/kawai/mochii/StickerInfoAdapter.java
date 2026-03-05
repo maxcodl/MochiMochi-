@@ -1,4 +1,4 @@
-package com.kawai.mochii;
+package com.kawai.mochi;
 
 import android.content.Context;
 import android.graphics.BitmapFactory;
