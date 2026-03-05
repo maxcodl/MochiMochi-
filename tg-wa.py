@@ -15,11 +15,13 @@ import json
 import gzip
 import tempfile
 import subprocess
+import concurrent.futures
 import ffmpeg
 from pathlib import Path
 import sys
 import shutil
 import emoji
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -97,6 +99,28 @@ def sanitize_filename(name: str) -> str:
 WA_MAX_BYTES   = 500 * 1024  # 500 KB per sticker (hard limit)
 WA_ANIM_TARGET = 500 * 1024  # encode target (use full limit with fast encoding)
 
+# Shared HTTP session (reduces TCP/TLS setup overhead per sticker request).
+_HTTP_SESSION: aiohttp.ClientSession | None = None
+
+
+async def _get_http_session() -> aiohttp.ClientSession:
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None or _HTTP_SESSION.closed:
+        timeout = aiohttp.ClientTimeout(total=60)
+        _HTTP_SESSION = aiohttp.ClientSession(timeout=timeout)
+    return _HTTP_SESSION
+
+
+async def _run_cpu_bound(func, *args):
+    """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: func(*args))
+
+
+def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
+    img = Image.open(BytesIO(sticker_data))
+    return convert_to_whatsapp_static(img)
+
 def build_open_app_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Install / Update App", url=APP_PLAYSTORE_URL)]
@@ -164,36 +188,11 @@ async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool,
                 return result
                 
         elif is_video:
-            # WebM/video files - check with ffmpeg
-            try:
-                with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
-                    tmp.write(sticker_data)
-                    tmp_path = tmp.name
-                
-                try:
-                    probe = ffmpeg.probe(tmp_path)
-                    video_streams = [s for s in probe.get('streams', []) if s['codec_type'] == 'video']
-                    
-                    if not video_streams:
-                        result['valid'] = False
-                        result['reason'] = "Video file has no video stream"
-                        return result
-                    
-                    duration = float(probe.get('format', {}).get('duration', 0))
-                    if duration <= 0:
-                        result['valid'] = False
-                        result['reason'] = "Video has zero duration"
-                        return result
-                    
-                    if duration > 3.1:
-                        result['warnings'].append(f"Video too long ({duration:.1f}s), will be trimmed to 3s")
-                        
-                finally:
-                    os.unlink(tmp_path)
-                    
-            except Exception as e:
+            # WebM magic bytes check: EBML header 0x1A 0x45 0xDF 0xA3
+            # Full validation (duration, streams) happens during conversion — no temp file needed here.
+            if not (len(sticker_data) >= 4 and sticker_data[:4] == b'\x1a\x45\xdf\xa3'):
                 result['valid'] = False
-                result['reason'] = f"Invalid video format: {str(e)}"
+                result['reason'] = "Not a valid WebM file (bad magic bytes)"
                 return result
         
         else:
@@ -266,16 +265,17 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                 import gzip as _gzip
                 json_bytes = _gzip.decompress(tray_data)
                 try:
-                    import lottie  # type: ignore
-                    from lottie.exporters.png import export_png as _export_png  # type: ignore
-                    anim = lottie.Animation.load(BytesIO(json_bytes))
+                    from lottie.parsers.tgs import parse_tgs_json
+                    from lottie.exporters.cairo import export_png as _export_png
+                    anim = parse_tgs_json(BytesIO(json_bytes))
                     frame_buf = BytesIO()
-                    _export_png(anim, frame_buf, frame=0, width=96, height=96)
+                    _export_png(anim, frame_buf, frame=0)
                     frame_buf.seek(0)
                     img = Image.open(frame_buf).copy()
-                    logger.info("Rendered TGS first frame via lottie library for tray icon")
-                except ImportError:
-                    raise Exception("lottie library not available for TGS rendering")
+                    img = img.resize((96, 96), Image.LANCZOS)
+                    logger.info("Rendered TGS first frame via lottie/cairo for tray icon")
+                except Exception as e:
+                    raise Exception(f"lottie cairo render failed: {e}")
             else:
                 # WebM / video sticker — extract first frame via ffmpeg, keeping alpha plane.
                 logger.info("Extracting first frame from animated sticker for tray icon")
@@ -454,21 +454,24 @@ def _encode_animated_webp_under_limit(
 ) -> BytesIO:
     """
     Encode an animated WebP that fits within *max_size* bytes.
-    
-    FAST encoding strategy: Try a few key quality points instead of binary search.
+
+    Balanced speed/smoothness strategy:
+    1) Fast encoder pass first (close to old performance).
+    2) Heavier compression fallback only when needed.
+    3) Decimate frames only as a last resort.
     Preserves transparency via kmax=1 + allow_mixed + alpha_quality.
     """
     # CRITICAL: Ensure we have at least 2 frames for animation
     if len(pil_frames) < 2:
         raise Exception(f"Cannot create animated WebP with only {len(pil_frames)} frame(s). Need at least 2.")
     
-    def _try(frames, dur_ms, q):
+    def _try(frames, dur_ms, q, method):
         buf = BytesIO()
         frames[0].save(
             buf, format="WEBP", save_all=True,
             append_images=frames[1:],
             duration=dur_ms, loop=0,
-            quality=q, method=0,       # fastest encoder
+            quality=q, method=method,
             kmax=1,                    # every frame is a keyframe → no transparent bleed
             allow_mixed=True,          # lossless alpha + lossy colour per frame
             alpha_quality=90,          # high-quality alpha plane
@@ -476,18 +479,18 @@ def _encode_animated_webp_under_limit(
         )
         return buf
 
-    def _fast_quality_search(frames, dur_ms):
-        """Ultra-fast quality search: try only 3 key points for speed"""
-        for q in [50, 30, 15]:
-            buf = _try(frames, dur_ms, q)
+    def _quality_search(frames, dur_ms, qualities, method):
+        for q in qualities:
+            buf = _try(frames, dur_ms, q, method)
             sz = buf.tell()
             if sz <= max_size:
                 buf.seek(0)
-                return buf, q, sz
-        return None, None, 0
+                return buf, q, sz, method
+        return None, None, 0, None
 
-    # Try only essential decimation levels: 1, 2, 4 (skip 6 for speed)
-    decimation_levels = [1, 2, 4]
+    # Keep full frame cadence by default; only decimate if absolutely necessary.
+    # Extra rescue levels (3x/4x) help salvage hard stickers that otherwise get skipped.
+    decimation_levels = [1, 2, 3, 4]
     
     for decimation in decimation_levels:
         if decimation == 1:
@@ -509,169 +512,146 @@ def _encode_animated_webp_under_limit(
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
-        best_buf, best_q, best_size = _fast_quality_search(cur_frames, cur_dur)
+        # Pass 1: fast encode path (restores prior speed profile).
+        best_buf, best_q, best_size, used_method = _quality_search(
+            cur_frames,
+            cur_dur,
+            qualities=[72, 58, 46, 34, 24],
+            method=0,
+        )
+
+        # Pass 2: denser compression fallback — only worth running at reduced frame
+        # counts (decimation>=2). At full frame count, method=4 is extremely slow and
+        # the sticker almost always needs decimation anyway; skip straight to it.
+        if best_buf is None and decimation >= 2:
+            best_buf, best_q, best_size, used_method = _quality_search(
+                cur_frames,
+                cur_dur,
+                qualities=[50, 38, 28, 20],
+                method=4,
+            )
+
         if best_buf is not None:
             logger.info(
                 f"✓ Animated WebP: {len(cur_frames)} frames "
-                f"(decimation={decimation}x), quality={best_q}, "
+                f"(decimation={decimation}x), quality={best_q}, method={used_method}, "
                 f"{best_size // 1024}KB"
             )
             return best_buf
 
         logger.info(
-            f"Still over limit at decimation={decimation}x, quality=15 — "
+            f"Still over limit at decimation={decimation}x after fast+fallback encode — "
             f"trying more aggressive decimation…"
         )
 
     # No decimation level produced acceptable result - fail
     raise Exception(
         f"Could not encode animated WebP under {max_size // 1024}KB limit even with "
-        f"maximum decimation (4x) and minimum quality (15). "
+        f"maximum decimation (4x) and minimum fallback quality (20). "
         f"Sticker is too complex to convert."
     )
+
+
+# ── TGS in-process renderer ─────────────────────────────────────────────────
+# Must be a module-level (top-level) function so ProcessPoolExecutor can
+# pickle it across worker processes on Windows (spawn start method).
+def _tgs_render_frames_sync(json_bytes: bytes, ip: int, n_frames: int) -> list:
+    from io import BytesIO
+    from lottie.parsers.tgs import parse_tgs_json
+    from lottie.exporters.cairo import export_png
+
+    anim = parse_tgs_json(BytesIO(json_bytes))
+    raw_frames = []
+    for frame_i in range(ip, ip + n_frames):
+        buf = BytesIO()
+        export_png(anim, buf, frame=frame_i)
+        raw_frames.append(buf.getvalue())
+    return raw_frames
+
+_PROCESS_POOL = None
+
+
+def _get_process_pool():
+    """Lazy-init ProcessPoolExecutor — avoids recursive pool creation in workers."""
+    global _PROCESS_POOL
+    if _PROCESS_POOL is None:
+        _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+    return _PROCESS_POOL
+# ────────────────────────────────────────────────────────────────────────────
 
 
 async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
     """
     Convert Telegram's TGS format (Lottie JSON in gzip) to animated WebP.
-
-    PRIMARY path:  TGS -> JSON -> PNG frames (full RGBA) via lottie API -> animated WebP via PIL
-    FALLBACK path: TGS -> JSON -> GIF via lottie CLI -> animated WebP via ffmpeg
-                   (fallback loses smooth alpha — GIF only has 1-bit transparency)
+    Renders frames in a ProcessPoolExecutor (bypasses GIL for concurrent TGS
+    packs) with a subprocess GIF fallback if the lottie library is unavailable.
     """
     import json as _json
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmppath = Path(tmpdir)
-        json_path = tmppath / "sticker.json"
+    try:
+        with gzip.open(BytesIO(tgs_data), 'rb') as gz:
+            json_data = gz.read()
+    except Exception as e:
+        raise Exception(f"Invalid TGS file: {e}")
 
-        # 1. Decompress TGS (gzipped Lottie JSON)
-        try:
-            with gzip.open(BytesIO(tgs_data), 'rb') as gz:
-                json_data = gz.read()
+    try:
+        anim_meta = _json.loads(json_data)
+        fps = max(1.0, float(anim_meta.get('fr', 30)))
+        in_point  = int(anim_meta.get('ip', 0))
+        out_point = int(anim_meta.get('op', 90))
+    except Exception:
+        fps, in_point, out_point = 30.0, 0, 90
+
+    # Cap at 120 frames (~4s at 30fps) to bound memory and encode time.
+    render_frames     = min(max(1, out_point - in_point), int(10.0 * fps), 120)
+    frame_duration_ms = max(8, int(1000.0 / fps))
+
+    pil_frames = None
+    try:
+        loop = asyncio.get_running_loop()
+        raw_frames = await loop.run_in_executor(
+            _get_process_pool(), _tgs_render_frames_sync, json_data, in_point, render_frames
+        )
+        # Build PIL frames in the main process (PIL images don't pickle well)
+        pil_frames = []
+        for raw in raw_frames:
+            img = Image.open(BytesIO(raw)).convert("RGBA")
+            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+            img.thumbnail((512, 512), Image.LANCZOS)
+            canvas.paste(img, ((512 - img.width) // 2, (512 - img.height) // 2), img)
+            pil_frames.append(canvas)
+        logger.info(f"Rendered {len(pil_frames)} TGS frames in-process")
+    except Exception as png_err:
+        logger.warning(f"In-process lottie render failed: {png_err}, falling back to GIF subprocess")
+
+    if pil_frames is None or len(pil_frames) < 2:
+        # GIF fallback: lottie CLI → convert_video_to_animated_webp (ffmpeg path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            json_path = tmppath / "sticker.json"
             json_path.write_bytes(json_data)
-            logger.info(f"Decompressed TGS to JSON ({len(json_data)} bytes)")
-        except Exception as e:
-            logger.error(f"Failed to decompress TGS: {e}")
-            raise Exception(f"Invalid TGS file: {e}")
-
-        # 2. Parse animation metadata
-        try:
-            anim_meta = _json.loads(json_data)
-            fps = max(1.0, float(anim_meta.get('fr', 30)))
-            in_point  = int(anim_meta.get('ip', 0))
-            out_point = int(anim_meta.get('op', 90))
-            total_frames = max(1, out_point - in_point)
-        except Exception:
-            fps, in_point, total_frames = 30.0, 0, 90
-
-        # WhatsApp: max 10 s, min 8 ms/frame
-        max_frames        = int(10.0 * fps)
-        render_frames     = min(total_frames, max_frames)
-        frame_duration_ms = max(8, int(1000.0 / fps))
-
-        frames_dir = tmppath / "frames"
-        frames_dir.mkdir()
-
-        # === PRIMARY PATH: render each Lottie frame as RGBA PNG ===
-        try:
-            render_script = (
-                "import sys; "
-                "from lottie.parsers.lottie import parse_file; "
-                "from lottie.exporters.png import export; "
-                "import os; "
-                "anim = parse_file(sys.argv[1]); "
-                "ip = int(anim.in_point); "
-                "op = min(int(anim.out_point), ip + int(sys.argv[3])); "
-                "[export(anim, os.path.join(sys.argv[2], 'frame_{:04d}.png'.format(i - ip)), frame=i) "
-                " for i in range(ip, op)]; "
-                "print(f'DONE:{op - ip}')"
-            )
-            result = subprocess.run(
-                [sys.executable, "-c", render_script,
-                 str(json_path), str(frames_dir), str(render_frames)],
-                capture_output=True, text=True, timeout=120
-            )
-
-            if result.returncode != 0:
-                logger.error(f"Lottie render script failed (rc={result.returncode})")
-                logger.error(f"STDOUT: {result.stdout}")
-                logger.error(f"STDERR: {result.stderr}")
-                raise Exception(f"Lottie render failed: {result.stderr[:200]}")
-
-            frame_files = sorted(frames_dir.glob("frame_*.png"))
-
-            if not frame_files:
-                logger.error(f"No PNG frames found in {frames_dir}")
-                raise Exception(f"No PNG frames produced (rc={result.returncode}): {result.stderr[:200]}")
-
-            logger.info(f"✓ Rendered {len(frame_files)} RGBA PNG frames from TGS")
-
-            # Build 512×512 RGBA frames
-            pil_frames = []
-            for ff in frame_files:
-                try:
-                    img = Image.open(ff).convert("RGBA")
-                    canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-                    img.thumbnail((512, 512), Image.LANCZOS)
-                    canvas.paste(img, ((512 - img.width) // 2, (512 - img.height) // 2), img)
-                    pil_frames.append(canvas)
-                except Exception as fe:
-                    logger.warning(f"Skipping frame {ff.name}: {fe}")
-
-            if len(pil_frames) < 2:
-                raise Exception(f"Too few valid frames ({len(pil_frames)}) to make animation")
-
-            # Encode using shared helper — finer quality steps + frame decimation
-            # if quality alone can't get under the limit.  Transparency settings
-            # (kmax=1 / allow_mixed / alpha_quality) are never changed.
-            output = _encode_animated_webp_under_limit(
-                pil_frames, frame_duration_ms, max_size=WA_ANIM_TARGET
-            )
-            
-            # CRITICAL: Verify output is under 500KB hard limit
-            output_size = output.seek(0, 2)
-            output.seek(0)
-            if output_size > WA_MAX_BYTES:
-                raise Exception(f"Encoded output is {output_size // 1024}KB, exceeds 500KB hard limit")
-            if output_size > WA_ANIM_TARGET:
-                raise Exception(f"Encoder bug: output is {output_size // 1024}KB, exceeds target {WA_ANIM_TARGET // 1024}KB")
-            
-            logger.info(
-                f"✓ TGS → animated WebP: "
-                f"{len(pil_frames)} frames, {output_size // 1024}KB"
-            )
-            return output
-
-        except Exception as png_err:
-            logger.warning(f"PNG frame path failed: {png_err}. Falling back to GIF intermediate.")
-
-        # === FALLBACK PATH: GIF intermediate (binary alpha only) ===
-        gif_path = tmppath / "sticker.gif"
-        try:
-            # Use lottie cli to export GIF
+            gif_path = tmppath / "sticker.gif"
             cmd = [sys.executable, "-m", "lottie.exporters.gif", str(json_path), str(gif_path)]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise Exception(f"GIF export failed: {result.stderr[:200]}")
-            if not gif_path.exists() or gif_path.stat().st_size == 0:
-                raise Exception("GIF output empty or missing")
-            
-            # Since we are falling back to GIF, we must use convert_video_to_animated_webp
-            # which uses ffmpeg to convert GIF -> WebP while trying to keep transparency.
+            if result.returncode != 0 or not gif_path.exists() or gif_path.stat().st_size == 0:
+                raise Exception(
+                    "TGS conversion failed: in-process render unavailable "
+                    "and GIF fallback also failed"
+                )
             with open(gif_path, 'rb') as f:
                 gif_data = f.read()
-            
-            logger.warning(
-                f"TGS → GIF fallback ({len(gif_data) / 1024:.1f}KB) "
-                f"— smooth transparency NOT preserved (GIF has 1-bit alpha)"
-            )
-            return await convert_video_to_animated_webp(gif_data)
-        except subprocess.TimeoutExpired:
-            raise Exception("TGS → GIF conversion timed out (animation too complex)")
-        except Exception as gif_err:
-            raise Exception(f"TGS conversion failed — PNG: {png_err}; GIF: {gif_err}")
+        logger.warning(f"TGS → GIF fallback ({len(gif_data) / 1024:.1f}KB) — smooth transparency NOT preserved")
+        return await convert_video_to_animated_webp(gif_data)
 
+    output = await _run_cpu_bound(
+        _encode_animated_webp_under_limit, pil_frames, frame_duration_ms, WA_ANIM_TARGET
+    )
+    output_size = output.seek(0, 2)
+    output.seek(0)
+    if output_size > WA_MAX_BYTES:
+        raise Exception(f"Encoded output {output_size // 1024}KB exceeds 500KB limit")
+    logger.info(f"✓ TGS → animated WebP: {len(pil_frames)} frames, {output_size // 1024}KB")
+    return output
 
 
 async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
@@ -692,7 +672,7 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
 
         # --- 1. Probe input to get fps and duration ---
         try:
-            probe = ffmpeg.probe(str(input_path))
+            probe = await _run_cpu_bound(ffmpeg.probe, str(input_path))
             video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
             
             # For WebM, format-level duration is more reliable than stream-level
@@ -719,16 +699,16 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
             duration = 0.0
             input_fps = 15.0
 
-        # For WebM stickers, duration metadata is often broken (reports 0.001-0.002s for 1-2s videos)
-        # Solution: Extract ALL available frames (don't limit by duration), then check what we got
-        # WhatsApp limit: 10s max, 8fps min (8ms/frame min)
-        target_fps = min(input_fps, 20.0)  # Cap at 20fps for file size
-        target_fps = max(target_fps, 8.0)  # Ensure at least 8fps
+        # For WebM stickers, duration metadata is often broken (reports 0.001-0.002s for 1-2s videos).
+        # 20fps is visually smooth at sticker size and cuts frame count by ~17% vs 24fps,
+        # reducing encode time accordingly.
+        target_fps = min(input_fps, 20.0)
+        target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
         
         # Don't use duration to calculate max_frames - it's unreliable
-        # WhatsApp max: 10s * 20fps = 200 frames (safety limit)
-        max_frames = 200
+        # WhatsApp max: 10s; with 24fps ceiling this is 240 frames.
+        max_frames = 240
 
         # --- 2. Extract frames as RGBA PNG using ffmpeg ---
         # Force -c:v libvpx-vp9 (software decoder) — same as sticker-convert's
@@ -744,9 +724,14 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
             '-vsync', 'cfr',
             str(frames_dir / 'frame_%04d.png')
         ]
-        result = subprocess.run(extract_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise Exception(f"ffmpeg frame extraction failed: {result.stderr[:300]}")
+        proc = await asyncio.create_subprocess_exec(
+            *extract_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr_bytes = await proc.communicate()
+        if proc.returncode != 0:
+            raise Exception(f"ffmpeg frame extraction failed: {stderr_bytes.decode()[:300]}")
 
         frame_files = sorted(frames_dir.glob("frame_*.png"))
         if not frame_files:
@@ -773,8 +758,11 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         # --- 4. Encode animated WebP using shared helper ---
         # Uses finer quality steps + frame decimation to guarantee ≤500KB
         # while keeping kmax=1 / allow_mixed / alpha_quality intact.
-        output = _encode_animated_webp_under_limit(
-            pil_frames, frame_duration_ms, max_size=WA_ANIM_TARGET
+        output = await _run_cpu_bound(
+            _encode_animated_webp_under_limit,
+            pil_frames,
+            frame_duration_ms,
+            WA_ANIM_TARGET,
         )
         final_size = output.seek(0, 2)
         output.seek(0)
@@ -865,81 +853,69 @@ async def create_simple_zip(
         'skipped_reasons': []
     }
     
-    try:
-        for i, sticker in enumerate(stickers, 1):
+    sem = asyncio.Semaphore(5)
+
+    async def _process_one(i: int, sticker):
+        """Returns (index, data_bytes, extension, skip_reason_or_None)"""
+        async with sem:
             try:
-                if progress_callback:
-                    await progress_callback(i, total)
-                
                 sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
-                logger.debug(f"Downloaded sticker {i}.")
-                
-                # VERIFY STICKER BEFORE PROCESSING (strict 3KB minimum)
                 verification = await verify_sticker(
-                    sticker_data,
-                    sticker.is_animated,
-                    sticker.is_video,
-                    sticker.file_id
+                    sticker_data, sticker.is_animated, sticker.is_video, sticker.file_id
                 )
-                
                 if not verification['valid']:
                     logger.warning(f"❌ Skipping sticker {i}/{total}: {verification['reason']}")
-                    stats['skipped'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: {verification['reason']}")
-                    continue
-                
-                # Log warnings if any
-                if verification['warnings']:
-                    for warning in verification['warnings']:
-                        logger.info(f"⚠️ Sticker {i}: {warning}")
-                
+                    return i, None, None, verification['reason']
+                for w in verification['warnings']:
+                    logger.info(f"⚠️ Sticker {i}: {w}")
                 if convert:
-                    # Convert to WhatsApp format
                     if sticker.is_animated or sticker.is_video:
                         converted = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
-                        extension = "webp"
                     else:
-                        img = Image.open(BytesIO(sticker_data))
-                        converted = convert_to_whatsapp_static(img)
-                        extension = "webp"
-                    
-                    sticker_filename = f"sticker_{i:03d}.{extension}"
-                    sticker_path = work_dir / sticker_filename
-                    with open(sticker_path, 'wb') as f:
-                        f.write(converted.getvalue())
+                        converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
+                    return i, converted.getvalue(), "webp", None
                 else:
-                    # Save raw file with proper extension
-                    if sticker.is_animated:
-                        extension = "tgs"
-                    elif sticker.is_video:
-                        extension = "webm"
-                    else:
-                        extension = "webp"
-                    
-                    sticker_filename = f"sticker_{i:03d}.{extension}"
-                    sticker_path = work_dir / sticker_filename
-                    with open(sticker_path, 'wb') as f:
-                        f.write(sticker_data)
-                
-                valid_count += 1
-                await asyncio.sleep(0.3)  # Rate limiting
-                
+                    ext = "tgs" if sticker.is_animated else ("webm" if sticker.is_video else "webp")
+                    return i, sticker_data, ext, None
             except Exception as e:
                 logger.error(f"Error processing sticker {i}: {e}")
-                continue
-        
-        if valid_count == 0:
+                return i, None, None, str(e)
+
+    tasks = [asyncio.create_task(_process_one(i, s)) for i, s in enumerate(stickers, 1)]
+    raw_results = []
+    completed = 0
+    for fut in asyncio.as_completed(tasks):
+        idx, data, ext, reason = await fut
+        completed += 1
+        if progress_callback:
+            await progress_callback(completed, total)
+        if data is None:
+            stats['skipped'] += 1
+            stats['skipped_reasons'].append(f"Sticker {idx}: {reason}")
+        else:
+            raw_results.append((idx, data, ext))
+
+    try:
+        if not raw_results:
             raise ValueError("No valid stickers found after verification.")
-        
+
+        # Write files in original order
+        for idx, data, ext in sorted(raw_results, key=lambda x: x[0]):
+            sticker_filename = f"sticker_{idx:03d}.{ext}"
+            sticker_path = work_dir / sticker_filename
+            with open(sticker_path, 'wb') as f:
+                f.write(data)
+            valid_count += 1
+
         # Create ZIP
         zip_path = packs_dir / f"{set_name}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in work_dir.iterdir():
+            for file_path in sorted(work_dir.iterdir()):
                 zipf.write(file_path, file_path.name)
-        
+
         logger.info(f"Simple ZIP created: {zip_path} with {valid_count} stickers (skipped {stats['skipped']} invalid)")
         return zip_path, valid_count
-        
+
     finally:
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -950,8 +926,9 @@ async def create_wastickers_zip(
     stickers: list,
     title: str,
     author: str,
-    progress_callback=None
-) -> tuple[Path, int, dict]:
+    progress_callback=None,
+    return_valid_results: bool = False,
+) -> tuple[Path, int, dict] | tuple[list, dict]:
     """Creates a WhatsApp sticker pack ZIP file in a temporary folder.
     Returns: (zip_path, valid_count, stats_dict)
     """
@@ -968,6 +945,7 @@ async def create_wastickers_zip(
     work_dir.mkdir(exist_ok=True)
     
     valid_count = 0
+    valid_entries = []
     total = len(stickers)
     emoji_map = {}  # Map sticker filename to emoji
     stats = {
@@ -995,166 +973,181 @@ async def create_wastickers_zip(
         pack_type = "Animated" if should_be_animated else "Static"
         logger.info(f"Pack type determined: {pack_type} ({sum(1 for s in stickers if s.is_animated)} TGS + {sum(1 for s in stickers if s.is_video)} video + {sum(1 for s in stickers if not (s.is_animated or s.is_video))} static)")
 
-        # Process each sticker
-        for i, sticker in enumerate(stickers, 1):
-            try:
-                if progress_callback:
-                    await progress_callback(i, total)
-                
-                sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
-                logger.debug(f"Downloaded sticker {i}.")
-                
-                # VERIFY STICKER BEFORE PROCESSING
-                verification = await verify_sticker(
-                    sticker_data,
-                    sticker.is_animated,
-                    sticker.is_video,
-                    sticker.file_id
-                )
-                
-                if not verification['valid']:
-                    logger.warning(f"❌ Skipping sticker {i}/{total}: {verification['reason']}")
-                    stats['skipped'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: {verification['reason']}")
-                    
-                    # Categorize the issue
-                    reason_lower = verification['reason'].lower()
-                    if 'corrupt' in reason_lower or 'invalid' in reason_lower:
-                        stats['corrupt'] += 1
-                    elif 'empty' in reason_lower or 'transparent' in reason_lower:
-                        stats['empty'] += 1
-                    else:
-                        stats['invalid'] += 1
-                    
-                    continue
-                
-                # Log warnings
-                if verification['warnings']:
-                    stats['warnings'] += len(verification['warnings'])
-                    for warning in verification['warnings']:
-                        logger.info(f"⚠️ Sticker {i}: {warning}")
+        sem = asyncio.Semaphore(5)
 
-                converted = None
-                conversion_failed = False
+        async def process_one_sticker(i, sticker):
+            async with sem:
+                try:
+                    sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
+                    logger.debug(f"Downloaded sticker {i}.")
 
-                # === ANIMATED/VIDEO STICKER CONVERSION ===
-                if sticker.is_animated or sticker.is_video:
-                    logger.info(f"Sticker {i}/{total}: Converting {'TGS' if sticker.is_animated else 'video'} to animated WebP")
-                    try:
-                        animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
-                        animated_bytes = animated_out.getvalue()
-                        
-                        # Verify it's actually animated
-                        is_anim = _is_animated_webp_bytes(animated_bytes)
-                        logger.debug(f"Sticker {i}: Output is {'ANIMATED' if is_anim else 'STATIC'} ({len(animated_bytes)//1024}KB)")
-                        
-                        if not is_anim:
-                            logger.error(f"Sticker {i}: Conversion produced STATIC WebP - skipping (this should not happen)")
-                            stats['skipped'] += 1
-                            stats['invalid'] += 1
-                            stats['skipped_reasons'].append(f"Sticker {i}: conversion produced static instead of animated")
-                            continue
+                    verification = await verify_sticker(
+                        sticker_data,
+                        sticker.is_animated,
+                        sticker.is_video,
+                        sticker.file_id,
+                    )
+
+                    if not verification['valid']:
+                        reason = verification['reason']
+                        reason_lower = reason.lower()
+                        if 'corrupt' in reason_lower or 'invalid' in reason_lower:
+                            kind = 'corrupt'
+                        elif 'empty' in reason_lower or 'transparent' in reason_lower:
+                            kind = 'empty'
                         else:
-                            converted = BytesIO(animated_bytes)
-                            logger.info(f"Sticker {i}: Successfully converted to animated WebP")
-                            
-                    except Exception as anim_err:
-                        logger.error(f"Sticker {i}: Animated conversion failed: {anim_err}")
-                        conversion_failed = True
-                    
-                    # Last resort fallback for animated stickers
-                    if conversion_failed:
-                        logger.error(f"Sticker {i}: {'TGS' if sticker.is_animated else 'video'} conversion failed - skipping")
-                        stats['skipped'] += 1
-                        stats['skipped_reasons'].append(f"Sticker {i}: {'TGS' if sticker.is_animated else 'video'} conversion failed")
-                        continue
+                            kind = 'invalid'
+                        return {
+                            'index': i,
+                            'ok': False,
+                            'reason': reason,
+                            'kind': kind,
+                            'warnings': verification['warnings'],
+                        }
 
-                # === STATIC STICKER IN ANIMATED PACK ===
-                elif should_be_animated:
-                    # Static stickers should not be mixed with animated packs - skip them
-                    logger.warning(f"Sticker {i}/{total}: Static sticker found in animated pack - skipping to maintain pack consistency")
-                    stats['skipped'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: static sticker in animated pack")
-                    continue
+                    if sticker.is_animated or sticker.is_video:
+                        logger.info(f"Sticker {i}/{total}: Converting {'TGS' if sticker.is_animated else 'video'} to animated WebP")
+                        try:
+                            animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
+                            converted_bytes = animated_out.getvalue()
+                            if not _is_animated_webp_bytes(converted_bytes):
+                                return {
+                                    'index': i,
+                                    'ok': False,
+                                    'reason': 'conversion produced static instead of animated',
+                                    'kind': 'invalid',
+                                    'warnings': verification['warnings'],
+                                }
+                        except Exception:
+                            return {
+                                'index': i,
+                                'ok': False,
+                                'reason': f"{'TGS' if sticker.is_animated else 'video'} conversion failed",
+                                'kind': 'invalid',
+                                'warnings': verification['warnings'],
+                            }
+                    elif should_be_animated:
+                        return {
+                            'index': i,
+                            'ok': False,
+                            'reason': 'static sticker in animated pack',
+                            'kind': 'invalid',
+                            'warnings': verification['warnings'],
+                        }
+                    else:
+                        try:
+                            converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
+                            converted_bytes = converted.getvalue()
+                        except Exception:
+                            return {
+                                'index': i,
+                                'ok': False,
+                                'reason': 'static conversion failed',
+                                'kind': 'invalid',
+                                'warnings': verification['warnings'],
+                            }
 
-                # === STATIC STICKER IN STATIC PACK ===
+                    if should_be_animated and not _is_animated_webp_bytes(converted_bytes):
+                        return {
+                            'index': i,
+                            'ok': False,
+                            'reason': 'produced static WebP instead of animated',
+                            'kind': 'invalid',
+                            'warnings': verification['warnings'],
+                        }
+
+                    if len(converted_bytes) > WA_MAX_BYTES:
+                        return {
+                            'index': i,
+                            'ok': False,
+                            'reason': f"oversized after conversion ({len(converted_bytes) // 1024}KB)",
+                            'kind': 'invalid',
+                            'warnings': verification['warnings'],
+                        }
+
+                    is_valid, validation_reason = is_valid_webp_output(
+                        converted_bytes,
+                        require_animated=should_be_animated,
+                    )
+                    if not is_valid:
+                        return {
+                            'index': i,
+                            'ok': False,
+                            'reason': validation_reason,
+                            'kind': 'invalid',
+                            'warnings': verification['warnings'],
+                        }
+
+                    raw_emoji = getattr(sticker, 'emoji', "😀")
+                    emoji_list = emoji.distinct_emoji_list(raw_emoji)
+                    if not emoji_list:
+                        emoji_list = [raw_emoji] if raw_emoji else ["😀"]
+                    emoji_list = emoji_list[:3]
+
+                    return {
+                        'index': i,
+                        'ok': True,
+                        'bytes': converted_bytes,
+                        'file_id': sticker.file_id,
+                        'emoji_list': emoji_list,
+                        'warnings': verification['warnings'],
+                    }
+                except Exception as e:
+                    logger.error(f"Error processing sticker {i} in pack {set_name}: {e}")
+                    logger.debug(traceback.format_exc())
+                    return {
+                        'index': i,
+                        'ok': False,
+                        'reason': 'unexpected processing error',
+                        'kind': 'invalid',
+                        'warnings': [],
+                    }
+
+        tasks = [asyncio.create_task(process_one_sticker(i, sticker)) for i, sticker in enumerate(stickers, 1)]
+        results = []
+        completed = 0
+        for fut in asyncio.as_completed(tasks):
+            result = await fut
+            results.append(result)
+            completed += 1
+            if progress_callback:
+                await progress_callback(completed, total)
+
+        for result in sorted(results, key=lambda r: r['index']):
+            if result['warnings']:
+                stats['warnings'] += len(result['warnings'])
+                for warning in result['warnings']:
+                    logger.info(f"⚠️ Sticker {result['index']}: {warning}")
+
+            if not result['ok']:
+                stats['skipped'] += 1
+                stats['skipped_reasons'].append(f"Sticker {result['index']}: {result['reason']}")
+                kind = result.get('kind', 'invalid')
+                if kind == 'corrupt':
+                    stats['corrupt'] += 1
+                elif kind == 'empty':
+                    stats['empty'] += 1
                 else:
-                    logger.info(f"Sticker {i}/{total}: Converting static sticker")
-                    try:
-                        img = Image.open(BytesIO(sticker_data))
-                        converted = convert_to_whatsapp_static(img)
-                    except Exception as e:
-                        logger.error(f"Sticker {i}: Failed to convert static sticker: {e}")
-                        stats['skipped'] += 1
-                        stats['skipped_reasons'].append(f"Sticker {i}: static conversion failed")
-                        continue
-                
-                # Safety check
-                if converted is None:
-                    logger.error(f"Sticker {i}: Conversion resulted in None, skipping")
-                    stats['skipped'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: conversion produced None")
-                    continue
-
-                converted_bytes = converted.getvalue()
-                
-                # CRITICAL: Verify output is actually animated (not static)
-                if should_be_animated and not _is_animated_webp_bytes(converted_bytes):
-                    logger.error(f"Sticker {i}: Conversion resulted in STATIC WebP when animated was required!")
-                    stats['skipped'] += 1
                     stats['invalid'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: produced static WebP instead of animated")
-                    continue
+                logger.warning(f"❌ Skipping sticker {result['index']}/{total}: {result['reason']}")
+                continue
 
-                # Hard size gate — reject anything still over 500 KB after conversion
-                if len(converted_bytes) > WA_MAX_BYTES:
-                    logger.warning(
-                        f"❌ Skipping sticker {i}/{total}: converted size "
-                        f"{len(converted_bytes) // 1024}KB exceeds WhatsApp's 500KB limit"
-                    )
-                    stats['skipped'] += 1
-                    stats['invalid'] += 1
-                    stats['skipped_reasons'].append(
-                        f"Sticker {i}: oversized after conversion ({len(converted_bytes) // 1024}KB)"
-                    )
-                    continue
+            sticker_filename = f"{set_name}_{result['file_id'][-12:]}.webp"
+            sticker_path = work_dir / sticker_filename
+            with open(sticker_path, 'wb') as f:
+                f.write(result['bytes'])
 
-                is_valid, validation_reason = is_valid_webp_output(converted_bytes, require_animated=should_be_animated)
-                if not is_valid:
-                    logger.warning(f"❌ Skipping sticker {i}/{total}: {validation_reason}")
-                    stats['skipped'] += 1
-                    stats['invalid'] += 1
-                    stats['skipped_reasons'].append(f"Sticker {i}: {validation_reason}")
-                    continue
+            emoji_map[sticker_filename] = result['emoji_list']
+            valid_entries.append({
+                'file_id': result['file_id'],
+                'bytes': result['bytes'],
+                'emoji_list': result['emoji_list'],
+            })
+            logger.debug(f"Sticker {valid_count + 1} emojis: {result['emoji_list']}")
+            valid_count += 1
 
-                # Use unique filename based on file_id to avoid collisions
-                sticker_filename = f"{set_name}_{sticker.file_id[-12:]}.webp"
-                sticker_path = work_dir / sticker_filename
-                with open(sticker_path, 'wb') as f:
-                    f.write(converted_bytes)
-                
-                # Extract and store emoji info for this sticker
-                raw_emoji = getattr(sticker, 'emoji', "😀")
-                
-                # Robustly split emoji string using the emoji library
-                emoji_list = emoji.distinct_emoji_list(raw_emoji)
-                
-                if not emoji_list:
-                    # Fallback to simple split or default if something went wrong
-                    emoji_list = [raw_emoji] if raw_emoji else ["😀"]
-                
-                # Limit to first 3 emojis (WhatsApp requirement)
-                emoji_list = emoji_list[:3]
-                
-                emoji_map[sticker_filename] = emoji_list
-                logger.debug(f"Sticker {valid_count + 1} emojis: {emoji_list}")
-                
-                valid_count += 1
-                await asyncio.sleep(0.05) # Rate limiting delay
-
-            except Exception as e:
-                logger.error(f"Error processing sticker {i} in pack {set_name}: {e}")
-                logger.debug(traceback.format_exc())
+        if return_valid_results:
+            return valid_entries, stats
     
         if valid_count == 0:
             raise ValueError("No valid stickers found in the pack.")
@@ -1222,33 +1215,112 @@ async def create_wastickers_zip(
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
 
+
+def _build_wasticker_zip_from_valid_entries(
+    set_name: str,
+    tray_bytes: BytesIO,
+    valid_entries: list,
+    title: str,
+    author: str,
+    animated_sticker_pack: bool,
+) -> Path:
+    """Build a .wasticker from already-converted valid entries."""
+    packs_dir = BASE_DIR / "wasticker_packs"
+    packs_dir.mkdir(exist_ok=True)
+
+    import uuid
+    unique_id = uuid.uuid4().hex[:8]
+    work_dir = packs_dir / f"pack_{set_name}_{unique_id}"
+    work_dir.mkdir(exist_ok=True)
+
+    try:
+        tray_path = work_dir / "tray.png"
+        with open(tray_path, 'wb') as f:
+            f.write(tray_bytes.getvalue())
+
+        (work_dir / "author.txt").write_text(author, encoding='utf-8')
+        (work_dir / "title.txt").write_text(title, encoding='utf-8')
+
+        emoji_map = {}
+        for entry in valid_entries:
+            sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
+            sticker_path = work_dir / sticker_filename
+            with open(sticker_path, 'wb') as f:
+                f.write(entry['bytes'])
+            emoji_map[sticker_filename] = entry['emoji_list']
+
+        emojis_json_path = work_dir / "emojis.json"
+        with open(emojis_json_path, 'w', encoding='utf-8') as f:
+            json.dump(emoji_map, f, ensure_ascii=False, indent=2)
+
+        pack_identifier = uuid.uuid4().hex[:16]
+        stickers_array = []
+        for sticker_file, emoji_list in emoji_map.items():
+            stickers_array.append({
+                "image_file": sticker_file,
+                "emojis": emoji_list if emoji_list else ["😊"],
+            })
+
+        contents_json = {
+            "android_play_store_link": "",
+            "ios_app_store_link": "",
+            "sticker_packs": [{
+                "identifier": pack_identifier,
+                "name": title,
+                "publisher": author,
+                "tray_image_file": "tray.png",
+                "publisher_email": "",
+                "publisher_website": "",
+                "privacy_policy_website": "",
+                "license_agreement_website": "",
+                "image_data_version": "1",
+                "avoid_cache": False,
+                "animated_sticker_pack": animated_sticker_pack,
+                "stickers": stickers_array,
+            }],
+        }
+
+        contents_json_path = work_dir / "contents.json"
+        with open(contents_json_path, 'w', encoding='utf-8') as f:
+            json.dump(contents_json, f, ensure_ascii=False, indent=2)
+
+        zip_path = packs_dir / f"{set_name}.wasticker"
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in work_dir.iterdir():
+                zipf.write(file_path, file_path.name)
+        return zip_path
+    finally:
+        if work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+
 async def download_file_by_id(bot_token: str, file_id: str) -> bytes:
     """Downloads a file from Telegram using bot token and file_id."""
+    session = await _get_http_session()
+
     # Get file path
     url = f"https://api.telegram.org/bot{bot_token}/getFile"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, params={"file_id": file_id}) as resp:
-            data = await resp.json()
-            if not data["ok"]:
-                raise Exception(data["description"])
-            file_path = data["result"]["file_path"]
-        
-        # Download file
-        download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-        async with session.get(download_url) as resp:
-            if resp.status != 200:
-                raise Exception(f"Failed to download file: HTTP {resp.status}")
-            return await resp.read()
+    async with session.get(url, params={"file_id": file_id}) as resp:
+        data = await resp.json()
+        if not data["ok"]:
+            raise Exception(data["description"])
+        file_path = data["result"]["file_path"]
+
+    # Download file
+    download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+    async with session.get(download_url) as resp:
+        if resp.status != 200:
+            raise Exception(f"Failed to download file: HTTP {resp.status}")
+        return await resp.read()
 
 async def get_sticker_set_via_bot_api(bot_token: str, name: str):
     """Fetches sticker set information using Telegram Bot API."""
+    session = await _get_http_session()
     url = f"https://api.telegram.org/bot{bot_token}/getStickerSet"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, params={"name": name}) as resp:
-            data = await resp.json()
-            if not data["ok"]:
-                raise Exception(data["description"])
-            return data["result"]
+    async with session.get(url, params={"name": name}) as resp:
+        data = await resp.json()
+        if not data["ok"]:
+            raise Exception(data["description"])
+        return data["result"]
 
 @app.on_message(filters.command("auth") & filters.private)
 async def authorize_chat(client: Client, message: Message):
@@ -1420,13 +1492,12 @@ async def loadsticker_command(client: Client, message: Message):
             is_tgs = sticker.is_animated
             converted = await convert_to_whatsapp_animated(sticker_data, is_tgs)
         else:
-            img = Image.open(BytesIO(sticker_data))
-            converted = convert_to_whatsapp_static(img)
+            converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
 
         converted_bytes = converted.getvalue()
 
         # Create tray icon from the sticker
-        tray_bytes = optimize_tray_icon(converted_bytes, is_animated=False)
+        tray_bytes = await _run_cpu_bound(optimize_tray_icon, converted_bytes, False)
 
         await msg.edit_text("📦 Packaging .wasticker file...")
 
@@ -1504,8 +1575,7 @@ async def converts_command(client: Client, message: Message):
             is_tgs = sticker.is_animated
             converted = await convert_to_whatsapp_animated(sticker_data, is_tgs)
         else:
-            img = Image.open(BytesIO(sticker_data))
-            converted = convert_to_whatsapp_static(img)
+            converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
 
         converted_bytes = converted.getvalue()
 
@@ -1560,7 +1630,7 @@ async def process_stickers(
         tray_is_animated = first_sticker.is_animated or first_sticker.is_video
         
         tray_data = await download_file_by_id(BOT_TOKEN, tray_file_id)
-        optimized_tray_bytes = optimize_tray_icon(tray_data, is_animated=tray_is_animated)
+        optimized_tray_bytes = await _run_cpu_bound(optimize_tray_icon, tray_data, tray_is_animated)
 
         # Handle simple ZIP mode (-z flag)
         if use_simple_zip:
@@ -1637,63 +1707,66 @@ async def process_stickers(
         total_valid_stickers_count = 0
 
         for type_name, type_stickers in types_to_process:
-            type_chunks = split_into_chunks(type_stickers)
-            num_type_parts = len(type_chunks)
+            async def update_progress(current, total):
+                if current % 5 != 0 and current != total:
+                    return
 
-            for part_num, chunk in enumerate(type_chunks, 1):
-                part_title = set_title + (f" {part_num}" if num_type_parts > 1 else "")
-                type_letter = type_name[0].lower()
-                internal_name = f"{set_name_sanitized}_{type_letter}_part_{part_num}"
-                
-                async def update_progress(current, total):
-                    if current % 5 != 0 and current != total:
-                        return
-                    
-                    progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
-                    percentage = int(current / total * 100)
-                    progress_text = (
-                        f"Processing **{type_name}** stickers" +
-                        (f" (Part {part_num}/{num_type_parts})" if num_type_parts > 1 else "") +
-                        f"\n\n{progress_bar} {percentage}%\n" +
-                        f"Sticker {current}/{total}"
-                    )
-                    logger.info(f"Progress: {type_name} - {current}/{total} ({percentage}%)")
-                    try:
-                        await msg.edit_text(progress_text)
-                    except Exception:
-                        pass
-
-                zip_path, valid_count, stats = await create_wastickers_zip(
-                    internal_name,
-                    optimized_tray_bytes,
-                    chunk,
-                    part_title,
-                    author=author_name,
-                    progress_callback=update_progress
+                progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
+                percentage = int(current / total * 100)
+                progress_text = (
+                    f"Processing **{type_name}** stickers"
+                    f"\n\n{progress_bar} {percentage}%\n"
+                    f"Sticker {current}/{total}"
                 )
+                logger.info(f"Progress: {type_name} - {current}/{total} ({percentage}%)")
+                try:
+                    await msg.edit_text(progress_text)
+                except Exception:
+                    pass
 
+            type_letter = type_name[0].lower()
+            prep_name = f"{set_name_sanitized}_{type_letter}_prep"
+            valid_entries, stats = await create_wastickers_zip(
+                prep_name,
+                optimized_tray_bytes,
+                type_stickers,
+                set_title,
+                author=author_name,
+                progress_callback=update_progress,
+                return_valid_results=True,
+            )
+
+            valid_count_total = len(valid_entries)
+            total_valid_stickers_count += valid_count_total
+
+            if valid_count_total == 0:
+                raise ValueError("No valid stickers found in the pack.")
+
+            valid_chunks = split_into_chunks(valid_entries, 30)
+            num_type_parts = len(valid_chunks)
+
+            for part_num, valid_chunk in enumerate(valid_chunks, 1):
+                part_title = set_title + (f" {part_num}" if num_type_parts > 1 else "")
+                internal_name = f"{set_name_sanitized}_{type_letter}_part_{part_num}"
                 part_suffix = f" (Part {part_num}/{num_type_parts})" if num_type_parts > 1 else ""
 
-                # WhatsApp requires 3–30 stickers per pack. Skip packs that are too small.
-                if valid_count < 3:
+                if len(valid_chunk) < 3:
                     logger.warning(
-                        f"Pack '{type_name}{part_suffix}' has only {valid_count} valid sticker(s) "
+                        f"Pack '{type_name}{part_suffix}' has only {len(valid_chunk)} valid sticker(s) "
                         f"— WhatsApp requires ≥3. Skipping this pack."
                     )
-                    try:
-                        await msg.edit_text(
-                            f"⚠️ Skipped {type_name} pack: only {valid_count} valid sticker(s) "
-                            f"(WhatsApp requires ≥3 per pack)."
-                        )
-                    except Exception:
-                        pass
-                    if zip_path.exists():
-                        zip_path.unlink(missing_ok=True)
                     continue
 
-                total_valid_stickers_count += valid_count
-                
-                caption = f"{type_name} Stickers{part_suffix}: {valid_count} stickers"
+                zip_path = _build_wasticker_zip_from_valid_entries(
+                    internal_name,
+                    optimized_tray_bytes,
+                    valid_chunk,
+                    part_title,
+                    author_name,
+                    has_animated,
+                )
+
+                caption = f"{type_name} Stickers{part_suffix}: {len(valid_chunk)} stickers"
                 if stats['skipped'] > 0:
                     caption += f"\nSkipped {stats['skipped']} invalid:"
                     if stats['corrupt'] > 0:
@@ -1702,6 +1775,21 @@ async def process_stickers(
                         caption += f" {stats['empty']} empty"
                     if stats['invalid'] > 0:
                         caption += f" {stats['invalid']} invalid"
+                    if stats.get('skipped_reasons'):
+                        reason_counts = {}
+                        for entry in stats['skipped_reasons']:
+                            # entry format: "Sticker <n>: <reason>"
+                            reason = entry.split(': ', 1)[1] if ': ' in entry else entry
+                            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                        top_reasons = sorted(
+                            reason_counts.items(),
+                            key=lambda x: x[1],
+                            reverse=True,
+                        )[:3]
+                        if top_reasons:
+                            caption += "\nTop skip reasons:"
+                            for reason, count in top_reasons:
+                                caption += f"\n- {count}x {reason}"
                 if stats['warnings'] > 0:
                     caption += f"\n{stats['warnings']} warning(s) logged"
                 
@@ -2095,6 +2183,7 @@ async def process_local_folder(client: Client, message: Message):
 
         total_processed = 0
         zip_paths = []
+        _local_sem = asyncio.Semaphore(5)
 
         for type_name, files in types_to_process:
             chunks = split_into_chunks(files, 30)
@@ -2106,39 +2195,38 @@ async def process_local_folder(client: Client, message: Message):
                 processing_dir.mkdir(exist_ok=True)
                 
                 processed_count = 0
-                for i, sticker_file in enumerate(chunk, 1):
+
+                async def _convert_local_file(sf, _sem=_local_sem):
+                    async with _sem:
+                        try:
+                            with open(sf, 'rb') as fh:
+                                fdata = fh.read()
+                            is_tgs = sf.suffix.lower() == '.tgs'
+                            if sf in animated_files:
+                                conv = await convert_to_whatsapp_animated(fdata, is_tgs)
+                            else:
+                                conv = await _run_cpu_bound(_convert_static_bytes_to_webp, fdata)
+                            return sf, conv.getvalue(), None
+                        except Exception as exc:
+                            logger.error(f"Error processing {sf.name}: {exc}")
+                            return sf, None, str(exc)
+
+                _local_tasks = [asyncio.create_task(_convert_local_file(sf)) for sf in chunk]
+                _local_done = 0
+                for _fut in asyncio.as_completed(_local_tasks):
+                    sf, data, _err = await _fut
+                    _local_done += 1
                     try:
                         part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
-                        try:
-                            await msg.edit_text(f"📦 Processing {type_name}{part_suffix} file {i}/{len(chunk)}: {sticker_file.name}")
-                        except Exception:
-                            pass
-
-                        # Read file
-                        with open(sticker_file, 'rb') as f:
-                            file_data = f.read()
-
-                        is_tgs = sticker_file.suffix.lower() == '.tgs'
-
-                        # Convert
-                        if sticker_file in animated_files:
-                            converted = await convert_to_whatsapp_animated(file_data, is_tgs)
-                        else:
-                            img = Image.open(BytesIO(file_data))
-                            converted = convert_to_whatsapp_static(img)
-
-                        # Save to processed directory
-                        output_name = f"{sticker_file.stem}_whatsapp.webp"
-                        output_path = processing_dir / output_name
-                        with open(output_path, 'wb') as f:
-                            f.write(converted.getvalue())
-
+                        await msg.edit_text(f"📦 Processing {type_name}{part_suffix}: {_local_done}/{len(chunk)}")
+                    except Exception:
+                        pass
+                    if data is not None:
+                        output_name = f"{sf.stem}_whatsapp.webp"
+                        with open(processing_dir / output_name, 'wb') as fh:
+                            fh.write(data)
                         processed_count += 1
-                        logger.info(f"Processed {sticker_file.name} -> {output_name}")
-
-                    except Exception as e:
-                        logger.error(f"Error processing {sticker_file.name}: {e}")
-                        continue
+                        logger.info(f"Processed {sf.name}")
 
                 if processed_count == 0:
                     shutil.rmtree(processing_dir, ignore_errors=True)
@@ -2151,7 +2239,7 @@ async def process_local_folder(client: Client, message: Message):
                     with open(first_file, 'rb') as f:
                         tray_data = f.read()
                     is_animated = first_file in animated_files
-                    optimized_tray = optimize_tray_icon(tray_data, is_animated=is_animated)
+                    optimized_tray = await _run_cpu_bound(optimize_tray_icon, tray_data, is_animated)
                     with open(tray_path, 'wb') as f:
                         f.write(optimized_tray.getvalue())
                 except Exception as e:
@@ -2264,6 +2352,7 @@ async def process_zip_upload(client: Client, message: Message):
                 if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
                 else message.chat.id
             )
+            _zip_sem = asyncio.Semaphore(5)
 
             for type_name, files in types_to_process:
                 chunks = split_into_chunks(files, 30)
@@ -2277,35 +2366,37 @@ async def process_zip_upload(client: Client, message: Message):
                     processing_dir.mkdir()
 
                     processed_count = 0
-                    for i, sticker_file in enumerate(chunk, 1):
+
+                    async def _convert_zip_file(sf, _sem=_zip_sem):
+                        async with _sem:
+                            try:
+                                with open(sf, 'rb') as fh:
+                                    fdata = fh.read()
+                                is_tgs = sf.suffix.lower() == '.tgs'
+                                if sf in animated_files:
+                                    conv = await convert_to_whatsapp_animated(fdata, is_tgs)
+                                else:
+                                    conv = await _run_cpu_bound(_convert_static_bytes_to_webp, fdata)
+                                return sf, conv.getvalue(), None
+                            except Exception as exc:
+                                logger.error(f"Error processing {sf.name}: {exc}")
+                                return sf, None, str(exc)
+
+                    _zip_tasks = [asyncio.create_task(_convert_zip_file(sf)) for sf in chunk]
+                    _zip_done = 0
+                    for _fut in asyncio.as_completed(_zip_tasks):
+                        sf, data, _err = await _fut
+                        _zip_done += 1
                         try:
-                            if i % 5 == 0 or i == len(chunk):
-                                try:
-                                    part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
-                                    await msg.edit_text(f"📦 Processing {type_name}{part_suffix} file {i}/{len(chunk)}: {sticker_file.name}")
-                                except Exception:
-                                    pass
-                            
-                            with open(sticker_file, 'rb') as f:
-                                file_data = f.read()
-
-                            is_tgs = sticker_file.suffix.lower() == '.tgs'
-                            
-                            if sticker_file in animated_files:
-                                converted = await convert_to_whatsapp_animated(file_data, is_tgs)
-                            else:
-                                img = Image.open(BytesIO(file_data))
-                                converted = convert_to_whatsapp_static(img)
-
-                            output_name = f"{sticker_file.stem}_whatsapp.webp"
-                            output_path = processing_dir / output_name
-                            with open(output_path, 'wb') as f:
-                                f.write(converted.getvalue())
-                            
+                            part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
+                            await msg.edit_text(f"📦 Processing {type_name}{part_suffix}: {_zip_done}/{len(chunk)}")
+                        except Exception:
+                            pass
+                        if data is not None:
+                            output_name = f"{sf.stem}_whatsapp.webp"
+                            with open(processing_dir / output_name, 'wb') as fh:
+                                fh.write(data)
                             processed_count += 1
-                        except Exception as e:
-                            logger.error(f"Error processing {sticker_file.name}: {e}")
-                            continue
 
                     if processed_count == 0:
                         continue
@@ -2317,7 +2408,7 @@ async def process_zip_upload(client: Client, message: Message):
                         with open(first_file, 'rb') as f:
                             tray_data = f.read()
                         is_animated = first_file in animated_files
-                        optimized_tray = optimize_tray_icon(tray_data, is_animated=is_animated)
+                        optimized_tray = await _run_cpu_bound(optimize_tray_icon, tray_data, is_animated)
                         with open(tray_path, 'wb') as f:
                             f.write(optimized_tray.getvalue())
                     except Exception as e:
