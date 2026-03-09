@@ -19,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.kawai.mochi.R;
 
 import java.util.List;
 
@@ -29,14 +30,21 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
+    private boolean isScrolling;
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
     // Cache so we don't hit SharedPreferences on every bind
-    private Boolean animationsEnabledCache = null;
+    Boolean animationsEnabledCache = null;
 
     StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
         this.stickerPacks = stickerPacks;
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
+        // Performance: Increase pool size to hold enough views for ~5 visible rows
+        sharedPool.setMaxRecycledViews(0, 25);
+    }
+
+    public void setScrolling(boolean isScrolling) {
+        this.isScrolling = isScrolling;
     }
 
     @Override
@@ -97,11 +105,12 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
                 // so scrolling back to a seen item costs nothing.
                 viewHolder.previewAdapter.updateData(previewStickers, pack.identifier,
                         previewSize, minMarginBetweenImages,
-                        pack.animatedStickerPack, animationsEnabled);
+                        pack.animatedStickerPack, animationsEnabled, isScrolling);
             } else {
                 StickerPreviewAdapter adapter = new StickerPreviewAdapter(
                         previewStickers, pack.identifier, previewSize,
                         minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled);
+                adapter.setScrolling(isScrolling);
                 viewHolder.previewAdapter = adapter;
                 viewHolder.imageRowView.setAdapter(adapter);
             }

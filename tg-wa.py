@@ -59,7 +59,7 @@ app = Client(
 # Authorized chats mechanism (whitelist for groups)
 BASE_DIR = Path(__file__).resolve().parent
 AUTHORIZED_CHATS_FILE = BASE_DIR / 'authorized_chats.json'
-APP_PLAYSTORE_URL = "http://github.com/maxcodl/MochiMochi/releases/"
+APP_URL = "http://github.com/maxcodl/MochiMochi/releases/"
 try:
     with open(AUTHORIZED_CHATS_FILE, 'r') as f:
         AUTHORIZED_CHATS = set(json.load(f))
@@ -123,7 +123,7 @@ def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
 
 def build_open_app_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Install / Update App", url=APP_PLAYSTORE_URL)]
+        [InlineKeyboardButton("Install / Update App", url=APP_URL)]
     ])
 
 

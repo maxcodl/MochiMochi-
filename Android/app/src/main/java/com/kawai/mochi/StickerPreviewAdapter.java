@@ -1,6 +1,5 @@
 package com.kawai.mochi;
 
-import android.content.Context;
 import android.net.Uri;
 import android.view.LayoutInflater;
 import android.view.ViewGroup;
@@ -14,6 +13,7 @@ import com.facebook.drawee.view.SimpleDraweeView;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import com.kawai.mochi.R;
 
 import java.util.List;
 
@@ -24,6 +24,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     private int marginBetween;
     private boolean isAnimatedPack;
     private boolean animationsEnabled;
+    private boolean isScrolling;
     /** True when used in a GridLayoutManager (details view); false for the horizontal list strip. */
     private final boolean isGridMode;
 
@@ -43,6 +44,10 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         this(stickers, packIdentifier, previewSize, marginBetween, isAnimatedPack, animationsEnabled, false);
     }
 
+    public void setScrolling(boolean isScrolling) {
+        this.isScrolling = isScrolling;
+    }
+
     /**
      * Update the adapter's data in-place.
      * If the pack identifier is unchanged, images are still in Fresco's memory cache and no
@@ -50,16 +55,18 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
      */
     public void updateData(List<Sticker> newStickers, String newPackId,
                            int newPreviewSize, int newMargin,
-                           boolean newIsAnimated, boolean newAnimEnabled) {
+                           boolean newIsAnimated, boolean newAnimEnabled, boolean newIsScrolling) {
         boolean packChanged = !newPackId.equals(packIdentifier)
                 || newIsAnimated != isAnimatedPack
-                || newAnimEnabled != animationsEnabled;
+                || newAnimEnabled != animationsEnabled
+                || newIsScrolling != isScrolling;
         this.stickers = newStickers;
         this.packIdentifier = newPackId;
         this.previewSize = newPreviewSize;
         this.marginBetween = newMargin;
         this.isAnimatedPack = newIsAnimated;
         this.animationsEnabled = newAnimEnabled;
+        this.isScrolling = newIsScrolling;
         if (packChanged) {
             notifyDataSetChanged();
         }
@@ -81,21 +88,21 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Sticker sticker = stickers.get(position);
-        final Uri fileUri = StickerPackLoader.getStickerAssetUri(packIdentifier, sticker.imageFileName);
         
-        // In the small list-strip preview, reduce render resolution to save memory.
-        // In grid (detail) mode always use the full size to keep stickers crisp.
-        int renderSize = (!isGridMode && animationsEnabled && isAnimatedPack)
-                ? (int) (previewSize * 0.6f)
-                : previewSize;
+        // Use pre-generated thumbnail if in list mode
+        String fileName = isGridMode ? sticker.imageFileName : "thumbs/thumb_" + sticker.imageFileName;
+        final Uri fileUri = StickerPackLoader.getStickerAssetUri(packIdentifier, fileName);
+        
+        // Set render resolution: 96px for list strip (Retina-sharp for small previews), full previewSize for grid
+        int decodeSize = isGridMode ? previewSize : 96;
 
         ImageRequest request = ImageRequestBuilder.newBuilderWithSource(fileUri)
-                .setResizeOptions(new ResizeOptions(renderSize, renderSize))
+                .setResizeOptions(new ResizeOptions(decodeSize, decodeSize))
                 .build();
 
         DraweeController controller = Fresco.newDraweeControllerBuilder()
                 .setImageRequest(request)
-                .setAutoPlayAnimations(animationsEnabled)
+                .setAutoPlayAnimations(animationsEnabled && !isScrolling)
                 .setOldController(holder.draweeView.getController())
                 .build();
         

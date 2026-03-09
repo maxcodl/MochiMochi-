@@ -14,6 +14,7 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.kawai.mochi.R;
 
 class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
 
@@ -30,7 +31,11 @@ class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
 
     StickerPackListItemViewHolder(final View itemView) {
         super(itemView);
-        container = itemView;
+        // We use a specific overlay view for the detail click to ensure it covers
+        // child views like the image list without them intercepting the touch.
+        View detailsArea = itemView.findViewById(R.id.details_clickable_area);
+        container = (detailsArea != null) ? detailsArea : itemView;
+
         titleView = itemView.findViewById(R.id.sticker_pack_title);
         publisherView = itemView.findViewById(R.id.sticker_pack_publisher);
         filesizeView = itemView.findViewById(R.id.sticker_pack_filesize);

@@ -20,9 +20,9 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.facebook.drawee.view.SimpleDraweeView;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -96,7 +96,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
+        String sizeStr = Formatter.formatShortFileSize(this, stickerPack.getTotalSize());
+        packSizeTextView.setText(getString(R.string.sticker_pack_size_summary, sizeStr, countStr));
 
         addButton.setOnClickListener(v -> addStickerPackToWhatsApp(stickerPack.identifier, stickerPack.name));
 
@@ -122,7 +123,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
         deletePackButton.setOnClickListener(v -> {
             new MaterialAlertDialogBuilder(this)
-                    .setTitle("Delete Pack")
+                    .setTitle(R.string.delete_pack_title)
                     .setMessage(R.string.delete_pack_confirm)
                     .setPositiveButton(R.string.delete_button, (dialog, which) -> {
                         WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
@@ -142,9 +143,9 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                                 StickerPackDetailsActivity act = ref.get();
                                 if (act == null) return;
                                 if (finalError != null) {
-                                    Toast.makeText(act, "Error: " + finalError, Toast.LENGTH_LONG).show();
+                                    Toast.makeText(act, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                                 } else {
-                                    Toast.makeText(act, "Pack deleted", Toast.LENGTH_SHORT).show();
+                                    Toast.makeText(act, R.string.pack_deleted, Toast.LENGTH_SHORT).show();
                                     Intent intent = new Intent(act, EntryActivity.class);
                                     intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
                                     act.startActivity(intent);
@@ -153,7 +154,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                             });
                         });
                     })
-                    .setNegativeButton("Cancel", null)
+                    .setNegativeButton(R.string.cancel, null)
                     .show();
         });
     }
@@ -213,7 +214,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
+        String sizeStr = Formatter.formatShortFileSize(this, stickerPack.getTotalSize());
+        packSizeTextView.setText(getString(R.string.sticker_pack_size_summary, sizeStr, countStr));
 
         findViewById(R.id.sticker_pack_animation_indicator).setVisibility(stickerPack.animatedStickerPack ? View.VISIBLE : View.GONE);
         
@@ -257,7 +259,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Single info icon, themed to match the toolbar text colour
-        menu.add(Menu.NONE, R.id.action_info, Menu.NONE, "Pack Info")
+        menu.add(Menu.NONE, R.id.action_info, Menu.NONE, R.string.action_info)
                 .setIcon(R.drawable.sticker_3rdparty_info)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
         android.view.MenuItem infoItem = menu.findItem(R.id.action_info);

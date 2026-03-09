@@ -31,7 +31,7 @@ public class StickerApplication extends Application {
         // Apply the saved night mode globally (light / dark / system).
         // DynamicColors (Monet) is applied per-activity in BaseActivity.onCreate()
         // AFTER the per-activity theme is set, so AMOLED gets the right surfaces.
-        android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
+        android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(themeMode);
     }
