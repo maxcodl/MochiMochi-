@@ -1,10 +1,12 @@
 import os
 import re
+import time
 import zipfile
 import logging
 from io import BytesIO
 from PIL import Image
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import aiohttp
@@ -222,19 +224,15 @@ async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool,
                 
                 # Check if image is completely transparent/empty
                 if img.mode in ('RGBA', 'LA'):
-                    # Convert to RGBA to check alpha
-                    img_rgba = img.convert('RGBA')
-                    pixels = list(img_rgba.getdata())
-                    
-                    # Check if all pixels are fully transparent
-                    if all(pixel[3] == 0 for pixel in pixels):
+                    import numpy as np
+                    alpha = np.array(img.convert('RGBA'))[:, :, 3]
+                    max_alpha = int(alpha.max())
+                    if max_alpha == 0:
                         result['valid'] = False
                         result['reason'] = "Image is completely transparent (empty)"
                         return result
-                    
                     # Check if image has very little content (>95% transparent)
-                    transparent_count = sum(1 for pixel in pixels if pixel[3] < 10)
-                    transparency_ratio = transparent_count / len(pixels)
+                    transparency_ratio = float((alpha < 10).sum()) / alpha.size
                     if transparency_ratio > 0.95:
                         result['warnings'].append(f"Image is {transparency_ratio*100:.1f}% transparent")
                 
@@ -864,9 +862,69 @@ def split_stickers_by_type(stickers: list):
     animated = [s for s in stickers if s.is_animated or s.is_video]
     return static, animated
 
+def classify_sticker_files(files: list) -> tuple[list, list]:
+    """Splits a list of Path objects into (static_files, animated_files)."""
+    static_files = []
+    animated_files = []
+    for f in files:
+        ext = f.suffix.lower()
+        if ext in ['.webm', '.tgs']:
+            animated_files.append(f)
+        elif ext == '.webp':
+            try:
+                with Image.open(f) as img:
+                    if getattr(img, "is_animated", False):
+                        animated_files.append(f)
+                    else:
+                        static_files.append(f)
+            except Exception:
+                static_files.append(f)
+        else:
+            static_files.append(f)
+    return static_files, animated_files
+
 def split_into_chunks(items: list, max_per_chunk: int = 30) -> list:
     """Splits list into chunks of max_per_chunk size."""
     return [items[i:i + max_per_chunk] for i in range(0, len(items), max_per_chunk)]
+
+def _build_contents_json(
+    identifier: str,
+    name: str,
+    publisher: str,
+    emoji_map: dict,
+    animated: bool,
+) -> dict:
+    """Build a WhatsApp-compliant contents.json structure."""
+    stickers_array = [
+        {"image_file": fname, "emojis": emojis if emojis else ["😊"]}
+        for fname, emojis in emoji_map.items()
+    ]
+    return {
+        "android_play_store_link": "",
+        "ios_app_store_link": "",
+        "sticker_packs": [{
+            "identifier": identifier,
+            "name": name,
+            "publisher": publisher,
+            "tray_image_file": "tray.png",
+            "publisher_email": "",
+            "publisher_website": "",
+            "privacy_policy_website": "",
+            "license_agreement_website": "",
+            "image_data_version": "1",
+            "avoid_cache": False,
+            "animated_sticker_pack": animated,
+            "stickers": stickers_array,
+        }],
+    }
+
+class SimpleSticker:
+    """Lightweight sticker descriptor used throughout the bot."""
+    def __init__(self, file_id, is_animated, is_video, emoji):
+        self.file_id = file_id
+        self.is_animated = is_animated
+        self.is_video = is_video
+        self.emoji = emoji
 
 async def create_simple_zip(
     set_name: str,
@@ -1233,29 +1291,14 @@ async def create_wastickers_zip(
                 "emojis": emoji_list if emoji_list else ["😊"]
             })
         
-        contents_json = {
-            "android_play_store_link": "",
-            "ios_app_store_link": "",
-            "sticker_packs": [{
-                "identifier": pack_identifier,
-                "name": title,
-                "publisher": author,
-                "tray_image_file": "tray.png",
-                "publisher_email": "",
-                "publisher_website": "",
-                "privacy_policy_website": "",
-                "license_agreement_website": "",
-                "image_data_version": "1",
-                "avoid_cache": False,
-                "animated_sticker_pack": True,  # All our packs are animated
-                "stickers": stickers_array
-            }]
-        }
+        contents_json = _build_contents_json(
+            pack_identifier, title, author, emoji_map, should_be_animated
+        )
         
         contents_json_path = work_dir / "contents.json"
         with open(contents_json_path, 'w', encoding='utf-8') as f:
             json.dump(contents_json, f, ensure_ascii=False, indent=2)
-        logger.info(f"Created WhatsApp-compliant contents.json with {len(stickers_array)} stickers")
+        logger.info(f"Created WhatsApp-compliant contents.json with {len(emoji_map)} stickers")
 
         # Create ZIP from folder in wasticker_packs directory
         zip_path = packs_dir / f"{set_name}.wasticker"
@@ -1311,31 +1354,9 @@ def _build_wasticker_zip_from_valid_entries(
             json.dump(emoji_map, f, ensure_ascii=False, indent=2)
 
         pack_identifier = uuid.uuid4().hex[:16]
-        stickers_array = []
-        for sticker_file, emoji_list in emoji_map.items():
-            stickers_array.append({
-                "image_file": sticker_file,
-                "emojis": emoji_list if emoji_list else ["😊"],
-            })
-
-        contents_json = {
-            "android_play_store_link": "",
-            "ios_app_store_link": "",
-            "sticker_packs": [{
-                "identifier": pack_identifier,
-                "name": title,
-                "publisher": author,
-                "tray_image_file": "tray.png",
-                "publisher_email": "",
-                "publisher_website": "",
-                "privacy_policy_website": "",
-                "license_agreement_website": "",
-                "image_data_version": "1",
-                "avoid_cache": False,
-                "animated_sticker_pack": animated_sticker_pack,
-                "stickers": stickers_array,
-            }],
-        }
+        contents_json = _build_contents_json(
+            pack_identifier, title, author, emoji_map, animated_sticker_pack
+        )
 
         contents_json_path = work_dir / "contents.json"
         with open(contents_json_path, 'w', encoding='utf-8') as f:
@@ -1363,10 +1384,16 @@ async def download_file_by_id(bot_token: str, file_id: str) -> bytes:
         file_path = data["result"]["file_path"]
 
     # Download file
+    _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # 20 MB hard cap
     download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
     async with session.get(download_url) as resp:
         if resp.status != 200:
             raise Exception(f"Failed to download file: HTTP {resp.status}")
+        content_length = resp.headers.get("Content-Length")
+        if content_length and int(content_length) > _MAX_DOWNLOAD_BYTES:
+            raise Exception(
+                f"File too large ({int(content_length) // 1024}KB), refusing download"
+            )
         return await resp.read()
 
 async def get_sticker_set_via_bot_api(bot_token: str, name: str):
@@ -1509,6 +1536,10 @@ async def loadsticker_command(client: Client, message: Message):
         await message.reply_text("❌ This chat is not authorized.")
         return
 
+    if _is_rate_limited(message.from_user.id):
+        await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
+        return
+
     # Must reply to a sticker
     replied = message.reply_to_message
     if not replied or not replied.sticker:
@@ -1603,6 +1634,10 @@ async def converts_command(client: Client, message: Message):
         await message.reply_text("❌ This chat is not authorized.")
         return
 
+    if _is_rate_limited(message.from_user.id):
+        await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
+        return
+
     # Must reply to a sticker
     replied = message.reply_to_message
     if not replied or not replied.sticker:
@@ -1660,6 +1695,19 @@ async def converts_command(client: Client, message: Message):
 
 active_sticker_sessions = {}
 
+# Per-user rate limiting: max 1 heavy command per _RATE_LIMIT_SECONDS seconds
+_user_last_command: dict[int, float] = {}
+_RATE_LIMIT_SECONDS = 10
+
+def _is_rate_limited(user_id: int) -> bool:
+    now = time.monotonic()
+    last = _user_last_command.get(user_id, 0)
+    if now - last < _RATE_LIMIT_SECONDS:
+        return True
+    _user_last_command[user_id] = now
+    return False
+
+
 async def process_stickers(
     client: Client,
     msg: Message,
@@ -1694,10 +1742,13 @@ async def process_stickers(
             await msg.edit_text(f"Creating {'raw' if skip_conversion else 'converted'} ZIP with {len(stickers)} stickers...")
             
             # Progress callback
+            _last_edit_simple = [0.0]
             async def update_progress(current, total):
-                if current % 5 != 0 and current != total:
+                now = time.monotonic()
+                if current != total and now - _last_edit_simple[0] < 4.0:
                     return
-                
+                _last_edit_simple[0] = now
+
                 progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
                 percentage = int(current / total * 100)
                 action = "Downloading" if skip_conversion else "Converting"
@@ -1764,9 +1815,12 @@ async def process_stickers(
         total_valid_stickers_count = 0
 
         for type_name, type_stickers in types_to_process:
+            _last_edit_pack = [0.0]
             async def update_progress(current, total):
-                if current % 5 != 0 and current != total:
+                now = time.monotonic()
+                if current != total and now - _last_edit_pack[0] < 4.0:
                     return
+                _last_edit_pack[0] = now
 
                 progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
                 percentage = int(current / total * 100)
@@ -1855,14 +1909,20 @@ async def process_stickers(
                 except Exception:
                     pass
                 
-                await client.send_document(
-                    chat_id=target_chat,
-                    document=str(zip_path),
-                    file_name=zip_path.name,
-                    caption=caption,
-                    #reply_markup=build_open_app_keyboard(),
-                    disable_notification=True
-                )
+                while True:
+                    try:
+                        await client.send_document(
+                            chat_id=target_chat,
+                            document=str(zip_path),
+                            file_name=zip_path.name,
+                            caption=caption,
+                            #reply_markup=build_open_app_keyboard(),
+                            disable_notification=True
+                        )
+                        break
+                    except FloodWait as fw:
+                        logger.warning(f"FloodWait on send_document: waiting {fw.value}s")
+                        await asyncio.sleep(fw.value)
                 
                 zip_files_info.append((zip_path, internal_name))
                 await asyncio.sleep(1)
@@ -1890,6 +1950,13 @@ async def process_stickers(
             except Exception:
                 pass
 
+    except FloodWait as e:
+        logger.warning(f"FloodWait in chat {target_chat} for pack {pack_name}: waiting {e.value}s")
+        await asyncio.sleep(e.value)
+        try:
+            await msg.edit_text("⏳ Rate limit hit. Please try again in a moment.")
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Pack conversion failed in chat {target_chat} for pack {pack_name}: {e}")
         logger.error(traceback.format_exc())
@@ -1900,8 +1967,6 @@ async def process_stickers(
             await msg.edit_text("I need permissions to send messages and files in this group!")
         elif "chat not found" in error_message:
             await msg.edit_text("I cannot access this group. Please ensure I'm added and have permissions!")
-        elif "flood control" in error_message:
-            await msg.edit_text("Rate limit exceeded. Please try again later.")
         else:
             await msg.edit_text(f"An unexpected error occurred: `{str(e)}`")
 
@@ -1912,6 +1977,10 @@ async def convert_pack(client: Client, message: Message):
     """Converts a Telegram sticker pack to WhatsApp compatible ZIP files."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
         await message.reply_text("This chat is not authorized. Contact the bot owner to authorize it with `/auth <chat_id>` in private.")
+        return
+
+    if _is_rate_limited(message.from_user.id):
+        await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
         return
 
     # Parse flags and custom name
@@ -1957,7 +2026,8 @@ async def convert_pack(client: Client, message: Message):
             "skip_conversion": skip_conversion,
             "custom_name": custom_name,
             "source_message_text": message.text,
-            "from_user": message.from_user
+            "from_user": message.from_user,
+            "created_at": time.monotonic(),
         }
         return
 
@@ -1984,13 +2054,6 @@ async def convert_pack(client: Client, message: Message):
     try:
         sticker_set = await get_sticker_set_via_bot_api(BOT_TOKEN, pack_name)
         set_title = custom_name if custom_name else sticker_set["title"]
-
-        class SimpleSticker:
-            def __init__(self, file_id, is_animated, is_video, emoji):
-                self.file_id = file_id
-                self.is_animated = is_animated
-                self.is_video = is_video
-                self.emoji = emoji
 
         # Create sticker list and deduplicate by file_id
         seen_ids = set()
@@ -2036,16 +2099,14 @@ async def convert_pack(client: Client, message: Message):
 @app.on_message(filters.sticker & (filters.group | filters.private))
 async def handle_individual_stickers(client: Client, message: Message):
     session_key = (message.chat.id, message.from_user.id)
+    # Expire sessions older than 1 hour to prevent unbounded memory growth
+    _SESSION_TTL = 3600
     if session_key in active_sticker_sessions:
+        if time.monotonic() - active_sticker_sessions[session_key].get("created_at", 0) > _SESSION_TTL:
+            active_sticker_sessions.pop(session_key, None)
+            return
         session = active_sticker_sessions[session_key]
         
-        class SimpleSticker:
-            def __init__(self, file_id, is_animated, is_video, emoji):
-                self.file_id = file_id
-                self.is_animated = is_animated
-                self.is_video = is_video
-                self.emoji = emoji
-
         session["stickers"].append(SimpleSticker(
             message.sticker.file_id,
             message.sticker.is_animated,
@@ -2213,24 +2274,7 @@ async def process_local_folder(client: Client, message: Message):
     msg = await message.reply_text(f"📦 Processing {len(sticker_files)} local sticker files...")
 
     try:
-        static_files = []
-        animated_files = []
-        
-        for f in sticker_files:
-            ext = f.suffix.lower()
-            if ext in ['.webm', '.tgs']:
-                animated_files.append(f)
-            elif ext == '.webp':
-                try:
-                    with Image.open(f) as img:
-                        if getattr(img, "is_animated", False):
-                            animated_files.append(f)
-                        else:
-                            static_files.append(f)
-                except:
-                    static_files.append(f)
-            else:
-                static_files.append(f)
+        static_files, animated_files = classify_sticker_files(sticker_files)
 
         types_to_process = []
         if static_files:
@@ -2362,6 +2406,12 @@ async def process_zip_upload(client: Client, message: Message):
             extract_dir.mkdir()
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Guard against Zip Slip: reject any entry whose resolved path escapes extract_dir
+                extract_dir_resolved = extract_dir.resolve()
+                for member in zip_ref.infolist():
+                    member_path = (extract_dir_resolved / member.filename).resolve()
+                    if not str(member_path).startswith(str(extract_dir_resolved) + os.sep) and member_path != extract_dir_resolved:
+                        raise ValueError(f"Zip Slip detected: refusing to extract '{member.filename}'")
                 zip_ref.extractall(extract_dir)
             
             # Find all sticker files
@@ -2373,24 +2423,7 @@ async def process_zip_upload(client: Client, message: Message):
                 await msg.edit_text("❌ No supported sticker files found in the ZIP. Supported formats: .webm, .tgs, .png, .jpg, .jpeg, .webp")
                 return
 
-            static_files = []
-            animated_files = []
-            
-            for f in sticker_files:
-                ext = f.suffix.lower()
-                if ext in ['.webm', '.tgs']:
-                    animated_files.append(f)
-                elif ext == '.webp':
-                    try:
-                        with Image.open(f) as img:
-                            if getattr(img, "is_animated", False):
-                                animated_files.append(f)
-                            else:
-                                static_files.append(f)
-                    except:
-                        static_files.append(f)
-                else:
-                    static_files.append(f)
+            static_files, animated_files = classify_sticker_files(sticker_files)
 
             types_to_process = []
             if static_files:
@@ -2528,6 +2561,27 @@ async def process_zip_upload(client: Client, message: Message):
             pass
 
 if __name__ == "__main__":
+    import atexit
+
+    def _shutdown():
+        global _HTTP_SESSION, _PROCESS_POOL
+        if _PROCESS_POOL is not None:
+            _PROCESS_POOL.shutdown(wait=False)
+            _PROCESS_POOL = None
+        if _HTTP_SESSION is not None and not _HTTP_SESSION.closed:
+            import asyncio as _asyncio
+            try:
+                loop = _asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(_HTTP_SESSION.close())
+                else:
+                    loop.run_until_complete(_HTTP_SESSION.close())
+            except Exception:
+                pass
+            _HTTP_SESSION = None
+
+    atexit.register(_shutdown)
+
     logger.info("Starting Sticker Pack Bot...")
     logger.info(f"Loaded {len(AUTHORIZED_CHATS)} authorized chats.")
     app.run()

@@ -2,12 +2,14 @@ package com.kawai.mochi;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.graphics.drawable.Animatable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.format.Formatter;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.ImageView;
@@ -17,9 +19,15 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.drawee.controller.BaseControllerListener;
+import com.facebook.drawee.interfaces.DraweeController;
+import com.facebook.drawee.view.SimpleDraweeView;
+import com.facebook.imagepipeline.image.ImageInfo;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.kawai.mochi.R;
@@ -56,6 +64,13 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private View alreadyAddedText;
     private StickerPack stickerPack;
     private View divider;
+    private View expandedStickerOverlay;
+    private View expandedStickerCard;
+    private SimpleDraweeView expandedStickerView;
+    private TextView expandedStickerName;
+    private TextView expandedStickerEmojis;
+    private TextView expandedStickerSize;
+    private boolean expandedPreviewVisible;
     private volatile boolean whitelistCheckCancelled;
     private ActivityResultLauncher<Intent> editPackLauncher;
 
@@ -85,6 +100,14 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         recyclerView.getViewTreeObserver().addOnGlobalLayoutListener(pageLayoutListener);
         recyclerView.addOnScrollListener(dividerScrollListener);
         divider = findViewById(R.id.divider);
+        expandedStickerOverlay = findViewById(R.id.expanded_sticker_overlay);
+        expandedStickerCard = findViewById(R.id.expanded_sticker_card);
+        expandedStickerView = findViewById(R.id.sticker_details_expanded_sticker);
+        expandedStickerName = findViewById(R.id.expanded_sticker_name);
+        expandedStickerEmojis = findViewById(R.id.expanded_sticker_emojis);
+        expandedStickerSize = findViewById(R.id.expanded_sticker_size);
+
+        setupExpandedPreview();
         
         setupAdapter();
         // Disable item animations so stickers don't flicker/fade-in when the grid is first laid out
@@ -169,9 +192,117 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                     getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_padding),
                     stickerPack.animatedStickerPack,
                     animationsEnabled,
-                    /* isGridMode= */ true);
+                    /* isGridMode= */ true,
+                    new StickerPreviewAdapter.StickerInteractionListener() {
+                        @Override
+                        public void onStickerHoldStarted(@NonNull Sticker sticker, @NonNull Uri stickerUri, boolean animatedPack) {
+                            showExpandedPreview(sticker, stickerUri, animatedPack);
+                        }
+
+                        @Override
+                        public void onStickerHoldEnded() {
+                            hideExpandedPreview();
+                        }
+                    });
             recyclerView.setAdapter(stickerPreviewAdapter);
         }
+    }
+
+    private void setupExpandedPreview() {
+        expandedStickerOverlay.setOnClickListener(v -> hideExpandedPreview());
+        expandedStickerOverlay.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                hideExpandedPreview();
+            }
+            return true;
+        });
+        expandedStickerCard.setOnClickListener(v -> {
+        });
+        hideExpandedPreviewImmediate();
+    }
+
+    private void showExpandedPreview(@NonNull Sticker sticker, @NonNull Uri stickerUri, boolean animatedPack) {
+        expandedStickerName.setText(sticker.imageFileName);
+        if (sticker.emojis == null || sticker.emojis.isEmpty()) {
+            expandedStickerEmojis.setText("-");
+        } else {
+            expandedStickerEmojis.setText(joinEmojis(sticker.emojis));
+        }
+        if (sticker.size > 0) {
+            expandedStickerSize.setText(Formatter.formatShortFileSize(this, sticker.size));
+        } else {
+            expandedStickerSize.setText("-");
+        }
+
+        if (animatedPack) {
+            DraweeController controller = Fresco.newDraweeControllerBuilder()
+                    .setUri(stickerUri)
+                    .setAutoPlayAnimations(true)
+                    .setControllerListener(new BaseControllerListener<ImageInfo>() {
+                        @Override
+                        public void onFailure(String id, Throwable throwable) {
+                            expandedStickerView.setImageResource(R.drawable.sticker_error);
+                        }
+
+                        @Override
+                        public void onFinalImageSet(String id, @Nullable ImageInfo imageInfo, @Nullable Animatable animatable) {
+                            // no-op
+                        }
+                    })
+                    .setOldController(expandedStickerView.getController())
+                    .build();
+            expandedStickerView.setController(controller);
+        } else {
+            expandedStickerView.setController(null);
+            expandedStickerView.setImageURI(stickerUri);
+        }
+
+        if (!expandedPreviewVisible) {
+            expandedPreviewVisible = true;
+            expandedStickerOverlay.setVisibility(View.VISIBLE);
+            expandedStickerCard.setVisibility(View.VISIBLE);
+            expandedStickerOverlay.setAlpha(0f);
+            expandedStickerCard.setAlpha(0f);
+            expandedStickerCard.setScaleX(0.92f);
+            expandedStickerCard.setScaleY(0.92f);
+            expandedStickerOverlay.animate().alpha(1f).setDuration(120).start();
+            expandedStickerCard.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(120).start();
+        }
+    }
+
+    private void hideExpandedPreview() {
+        if (!expandedPreviewVisible) {
+            return;
+        }
+        expandedPreviewVisible = false;
+        expandedStickerOverlay.animate().alpha(0f).setDuration(100).withEndAction(() -> expandedStickerOverlay.setVisibility(View.INVISIBLE)).start();
+        expandedStickerCard.animate().alpha(0f).scaleX(0.96f).scaleY(0.96f).setDuration(100).withEndAction(() -> expandedStickerCard.setVisibility(View.INVISIBLE)).start();
+    }
+
+    private void hideExpandedPreviewImmediate() {
+        expandedPreviewVisible = false;
+        expandedStickerOverlay.setVisibility(View.INVISIBLE);
+        expandedStickerCard.setVisibility(View.INVISIBLE);
+        expandedStickerOverlay.setAlpha(0f);
+        expandedStickerCard.setAlpha(0f);
+        expandedStickerCard.setScaleX(1f);
+        expandedStickerCard.setScaleY(1f);
+    }
+
+    @NonNull
+    private String joinEmojis(@NonNull java.util.List<String> emojis) {
+        StringBuilder builder = new StringBuilder();
+        for (String emoji : emojis) {
+            if (emoji == null || emoji.trim().isEmpty()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(emoji.trim());
+        }
+        return builder.length() == 0 ? "-" : builder.toString();
     }
 
     private void reloadStickerPack() {
@@ -183,7 +314,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                 ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(ref.get());
                 for (StickerPack pack : packs) {
                     if (pack.identifier.equals(id)) {
-                        StickerPackValidator.verifyStickerPackValidity(ref.get(), pack);
+                        // FIX: Pass 'false' for quickCheck since we want deep validation during reload
+                        StickerPackValidator.verifyStickerPackValidity(ref.get(), pack, false);
                         updatedPack = pack;
                         break;
                     }
@@ -348,6 +480,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     protected void onPause() {
         super.onPause();
         whitelistCheckCancelled = true;
+        hideExpandedPreviewImmediate();
     }
 
     private void updateAddUI(Boolean isWhitelisted) {

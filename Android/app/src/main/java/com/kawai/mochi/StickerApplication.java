@@ -19,14 +19,23 @@ public class StickerApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
-        
+
         // Configure Fresco for better performance with animated stickers
         ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
                 .setDownsampleEnabled(true) // Crucial for performance: scales images at decode time
                 .setDiskCacheEnabled(true)
-                .setExecutorSupplier(new DefaultExecutorSupplier(1)) // Limit concurrent decode threads
+                .setExecutorSupplier(new DefaultExecutorSupplier(3)) // Increased concurrent decode threads for smoother animations across multiple packs
                 .build();
         Fresco.initialize(this, config);
+
+        // Defer seeding of bundled packs to a background thread to avoid blocking startup
+        new Thread(() -> {
+            try {
+                WastickerParser.seedBundledPacksIfNeeded(getApplicationContext());
+            } catch (Exception e) {
+                android.util.Log.e("StickerApplication", "Bundled pack seeding failed", e);
+            }
+        }, "SeedBundledPacks").start();
 
         // Apply the saved night mode globally (light / dark / system).
         // DynamicColors (Monet) is applied per-activity in BaseActivity.onCreate()

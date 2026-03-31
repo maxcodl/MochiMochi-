@@ -44,7 +44,13 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     }
 
     public void setScrolling(boolean isScrolling) {
-        this.isScrolling = isScrolling;
+        if (this.isScrolling != isScrolling) {
+            this.isScrolling = isScrolling;
+            // When scrolling stops, notify the adapter to resume animations in visible preview strips
+            if (!isScrolling) {
+                notifyItemRangeChanged(0, getItemCount());
+            }
+        }
     }
 
     @Override

@@ -19,8 +19,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public class ImportIndividualStickerActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newCachedThreadPool();
@@ -35,6 +33,9 @@ public class ImportIndividualStickerActivity extends BaseActivity {
 
         if (Intent.ACTION_SEND.equals(intent.getAction())) {
             uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (uri == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
+                uri = intent.getClipData().getItemAt(0).getUri();
+            }
         } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
             uri = intent.getData();
         }
@@ -91,61 +92,79 @@ public class ImportIndividualStickerActivity extends BaseActivity {
         result.defaultTitle = activity.getString(R.string.imported_pack_default_title);
         result.defaultAuthor = activity.getString(R.string.unknown_author);
         try {
+            String fileName = null;
+            try {
+                fileName = getFileNameFromUri(activity, uri);
+            } catch (Exception ignored) {}
+            if (fileName == null) fileName = uri.getLastPathSegment();
+            
+            String lower = fileName != null ? fileName.toLowerCase() : "";
+            // Accept .webp, .wasticker, .idwasticker
+            if (!(lower.endsWith(".webp") || lower.endsWith(".wasticker") || lower.endsWith(".idwasticker"))) {
+                // Try to check mime type if extension is missing or generic
+                String mime = activity.getContentResolver().getType(uri);
+                if (mime == null || (!mime.contains("webp") && !mime.contains("octet-stream"))) {
+                    result.error = activity.getString(R.string.error_invalid_file_type);
+                    return result;
+                }
+            }
+
             result.tempDir = new File(activity.getCacheDir(), "idwasticker_" + System.currentTimeMillis());
             if (!result.tempDir.exists() && !result.tempDir.mkdirs()) {
                 result.error = "Failed to create temp directory";
                 return result;
             }
-            InputStream is = activity.getContentResolver().openInputStream(uri);
-            if (is == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
-            byte[] peek = new byte[2];
-            int peekRead = is.read(peek);
-            is.close();
-            boolean isZip = peekRead >= 2 && peek[0] == 0x50 && peek[1] == 0x4B;
-            if (isZip) {
-                InputStream is2 = activity.getContentResolver().openInputStream(uri);
-                if (is2 == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
-                ZipInputStream zis = new ZipInputStream(is2);
-                ZipEntry entry;
-                while ((entry = zis.getNextEntry()) != null) {
-                    File file = new File(result.tempDir, entry.getName());
-                    if (entry.isDirectory()) { 
-                        file.mkdirs(); 
-                    } else {
-                        File parent = file.getParentFile();
-                        if (parent != null) parent.mkdirs();
-                        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file))) {
-                            byte[] buffer = new byte[8192]; int len;
-                            while ((len = zis.read(buffer)) > 0) bos.write(buffer, 0, len);
-                        }
-                    }
-                    zis.closeEntry();
+
+            File webpFile = new File(result.tempDir, "sticker_" + System.currentTimeMillis() + ".webp");
+            try (InputStream is = activity.getContentResolver().openInputStream(uri);
+                 FileOutputStream fos = new FileOutputStream(webpFile)) {
+                if (is == null) {
+                    result.error = activity.getString(R.string.error_cannot_open_file);
+                    return result;
                 }
-                zis.close();
-                File[] files = result.tempDir.listFiles();
-                if (files != null) for (File f : files) if (f.getName().toLowerCase().endsWith(".webp")) result.webpFiles.add(f);
-                File titleFile = new File(result.tempDir, "title.txt");
-                if (titleFile.exists()) result.defaultTitle = WastickerParser.readStringFromFile(titleFile).trim();
-                File authorFile = new File(result.tempDir, "author.txt");
-                if (authorFile.exists()) result.defaultAuthor = WastickerParser.readStringFromFile(authorFile).trim();
-            } else {
-                InputStream is2 = activity.getContentResolver().openInputStream(uri);
-                if (is2 == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
-                File webpFile = new File(result.tempDir, "sticker_" + System.currentTimeMillis() + ".webp");
-                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(webpFile))) {
-                    byte[] buffer = new byte[8192]; int len;
-                    while ((len = is2.read(buffer)) > 0) bos.write(buffer, 0, len);
-                } finally {
-                    is2.close();
-                }
-                result.webpFiles.add(webpFile);
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = is.read(buffer)) > 0) fos.write(buffer, 0, len);
             }
+
+            result.webpFiles.add(webpFile);
             result.eligiblePacks = new ArrayList<>();
             try {
                 ArrayList<StickerPack> allPacks = StickerPackLoader.fetchStickerPacks(activity);
-                for (StickerPack pack : allPacks) if (pack.getStickers() != null && pack.getStickers().size() < 30) result.eligiblePacks.add(pack);
+                for (StickerPack pack : allPacks) {
+                    // WhatsApp allows max 30 stickers per pack
+                    if (pack.getStickers() != null && pack.getStickers().size() < 30) {
+                        result.eligiblePacks.add(pack);
+                    }
+                }
             } catch (Exception ignored) {}
-        } catch (Exception e) { result.error = e.getMessage(); }
+        } catch (Exception e) {
+            result.error = e.getMessage();
+        }
+        return result;
+    }
+
+    private static String getFileNameFromUri(ImportIndividualStickerActivity activity, Uri uri) {
+        String result = null;
+        if (uri.getScheme() != null && uri.getScheme().equals("content")) {
+            try (android.database.Cursor cursor = activity.getContentResolver().query(uri, null, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                    if (idx >= 0) result = cursor.getString(idx);
+                }
+            }
+        }
+        if (result == null) {
+            String path = uri.getPath();
+            if (path != null) {
+                int cut = path.lastIndexOf('/');
+                if (cut != -1 && cut + 1 < path.length()) {
+                    result = path.substring(cut + 1);
+                } else {
+                    result = path;
+                }
+            }
+        }
         return result;
     }
 
@@ -206,6 +225,11 @@ public class ImportIndividualStickerActivity extends BaseActivity {
                         WastickerParser.addWebpStickerToPack(activity, identifier, webpFile);
                     }
                 }
+                
+                // Invalidate cache so the user sees the new sticker immediately
+                StickerContentProvider provider = StickerContentProvider.getInstance();
+                if (provider != null) provider.invalidateStickerPackList();
+
                 error = null;
             } catch (Exception e) {
                 error = e.getMessage();

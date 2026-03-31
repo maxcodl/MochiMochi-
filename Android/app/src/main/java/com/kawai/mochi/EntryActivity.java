@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EntryActivity extends BaseActivity {
-    private static final ExecutorService executor = Executors.newCachedThreadPool();
+    private static final ExecutorService executor = Executors.newFixedThreadPool(2);
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private View progressBar;
     private View logoContainer;
@@ -124,13 +124,6 @@ public class EntryActivity extends BaseActivity {
                 if (stickerPackList.size() == 0) {
                     result = new Pair<>(null, new ArrayList<>());
                 } else {
-                    for (StickerPack stickerPack : stickerPackList) {
-                        try {
-                            StickerPackValidator.verifyStickerPackValidity(activity, stickerPack);
-                        } catch (Exception e) {
-                            Log.w("EntryActivity", "Validation warning for " + stickerPack.name + ": " + e.getMessage());
-                        }
-                    }
                     result = new Pair<>(null, stickerPackList);
                 }
             } catch (Exception e) {
@@ -165,6 +158,7 @@ public class EntryActivity extends BaseActivity {
                     provider.invalidateStickerPackList();
                 }
 
+                // Keep list consistent: after import, show complete pack list, not only the imported one.
                 ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(activity);
                 result = new Pair<>(null, packs);
             } catch (Exception e) {

@@ -131,7 +131,7 @@
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
-    <string name="default_folder_display">Default (internal storage)</string>
+    <string name="default_folder_display">Default (Stickers/.MochiMochi)</string>
     <string name="reset_to_default_toast">Reset to default folder</string>
     <string name="no_packs_to_diagnose">No packs found to diagnose</string>
     <string name="diagnostics_pack_selection_title">Select Pack for Diagnostic</string>
@@ -183,4 +183,5 @@
     <string name="pack_count_format">%1$s (%2$d/30)</string>
     <string name="error_cannot_open_file">Cannot open file</string>
     <string name="imported_pack_default_title">Imported Pack</string>
+    <string name="error_invalid_file_type">Invalid file type. Only .wasticker and .idwasticker files are supported.</string>
 </resources>

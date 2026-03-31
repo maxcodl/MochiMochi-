@@ -27,7 +27,7 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
-        android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
+        android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
         int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
 
@@ -52,7 +52,7 @@ public abstract class BaseActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
+        android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
         int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         

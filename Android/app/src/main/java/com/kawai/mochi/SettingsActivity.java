@@ -125,8 +125,9 @@ public class SettingsActivity extends BaseActivity {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_ASK_PACK_PICKER, isChecked).apply();
         });
 
-        // Animations switch
-        enableAnimationsSwitch.setChecked(isAnimationsEnabled(this));
+        // Performance Mode switch (Previously Animation switch)
+        // Checked means Performance Mode is ON -> Animations are OFF.
+        enableAnimationsSwitch.setChecked(prefs.getBoolean(KEY_ENABLE_ANIMATIONS, false));
         enableAnimationsSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_ENABLE_ANIMATIONS, isChecked).apply();
         });
@@ -139,15 +140,21 @@ public class SettingsActivity extends BaseActivity {
 
     private void updateFolderDisplay() {
         String path = WastickerParser.getStickerFolderPath(this);
-        currentFolderText.setText(path.equals(getFilesDir().getAbsolutePath()) ? getString(R.string.default_folder_display) : path);
+        currentFolderText.setText(WastickerParser.getDisplayablePath(this, path));
     }
 
     public static boolean isAskPackPickerEnabled(Context context) {
         return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_ASK_PACK_PICKER, false);
     }
 
+    /**
+     * Returns true if animations should be shown.
+     * Logic: If "Performance Mode" (KEY_ENABLE_ANIMATIONS) is ON, animations are DISABLED (returns false).
+     */
     public static boolean isAnimationsEnabled(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_ENABLE_ANIMATIONS, true);
+        // If Performance Mode is enabled (true), animations are disabled (false).
+        boolean performanceModeEnabled = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_ENABLE_ANIMATIONS, false);
+        return !performanceModeEnabled;
     }
 
     private void showPackSelectorForDiagnostics() {

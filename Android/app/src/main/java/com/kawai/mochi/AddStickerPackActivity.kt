@@ -18,10 +18,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Abstract activity that handles the logic of adding sticker packs to WhatsApp.
- *
- * Performance:
- * Uses Kotlin Coroutines (lifecycleScope) to offload validation from the Main thread,
- * ensuring the UI stays responsive even with many sticker packs.
+ * Optimized: Validation is performed quickly to avoid delays when clicking "Add to WhatsApp".
  */
 abstract class AddStickerPackActivity : BaseActivity() {
 
@@ -42,7 +39,6 @@ abstract class AddStickerPackActivity : BaseActivity() {
     }
 
     protected fun addStickerPackToWhatsApp(identifier: String, stickerPackName: String) {
-        // 1. Check if WhatsApp is installed
         if (!WhitelistCheck.isWhatsAppConsumerAppInstalled(packageManager) &&
             !WhitelistCheck.isWhatsAppSmbAppInstalled(packageManager)
         ) {
@@ -50,23 +46,27 @@ abstract class AddStickerPackActivity : BaseActivity() {
             return
         }
 
-        // 2. Perform validation on a background thread using Coroutines
+        // Show a brief message or loading if needed, but we want this to be fast.
         lifecycleScope.launch {
             try {
-                val packs = StickerPackLoader.fetchStickerPacks(this@AddStickerPackActivity)
-                val targetPack = packs.find { it.identifier == identifier }
+                // Optimization: Use a quick fetch + quick validation.
+                // We only do deep validation during import/edit, not every time we click 'Add'.
+                val targetPack = withContext(Dispatchers.IO) {
+                    StickerPackLoader.fetchStickerPack(this@AddStickerPackActivity, identifier)
+                }
                 
                 if (targetPack != null) {
                     withContext(Dispatchers.Default) {
-                        StickerPackValidator.verifyStickerPackValidity(this@AddStickerPackActivity, targetPack)
+                        // Pass 'true' for quickCheck to skip expensive bit-level decoding.
+                        // WhatsApp does its own validation anyway.
+                        StickerPackValidator.verifyStickerPackValidity(this@AddStickerPackActivity, targetPack, true)
                     }
                 }
 
-                // If validation passes, proceed to launch on main thread
                 proceedWithLaunch(identifier, stickerPackName)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Internal validation failed for pack: $identifier", e)
+                Log.e(TAG, "Validation failed: $identifier", e)
                 MessageDialogFragment.newInstance(
                     R.string.title_validation_error,
                     getString(R.string.validation_internal_check_failed, e.message)
@@ -97,11 +97,6 @@ abstract class AddStickerPackActivity : BaseActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // restoreStatusBarAppearance() removed to avoid issues when window doesn't have focus yet
-    }
-
     private fun restoreStatusBarAppearance() {
         val decorView = window?.decorView ?: return
         val isNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -115,7 +110,6 @@ abstract class AddStickerPackActivity : BaseActivity() {
         try {
             addStickerLauncher.launch(intent)
         } catch (e: ActivityNotFoundException) {
-            Log.e(TAG, "Couldn't open WhatsApp", e)
             Toast.makeText(this, R.string.whatsapp_not_installed, Toast.LENGTH_SHORT).show()
         }
     }

@@ -61,7 +61,10 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View view = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.sticker_edit_item, parent, false);
-        return new ViewHolder(view);
+        ViewHolder vh = new ViewHolder(view);
+        // Disable fade-in for snappy editing UI
+        vh.stickerImage.getHierarchy().setFadeDuration(0);
+        return vh;
     }
 
     @Override

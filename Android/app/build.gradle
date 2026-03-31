@@ -1,10 +1,11 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
+// Kotlin plugin is applied only at the top-level with apply false
+// This line has been removed to avoid double application
 
 android {
-    namespace 'com.kawai.mochi'
+    namespace = 'com.kawai.mochi'
     compileSdk 35
 
     defaultConfig {
@@ -35,12 +36,12 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
-            shrinkResources false
+            shrinkResources = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             minifyEnabled true
-            shrinkResources true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (System.getenv("KEYSTORE_FILE")) {
                 signingConfig signingConfigs.release
@@ -56,10 +57,17 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = '17'
+    // kotlinOptions block must be outside android for AGP 9+
+// Set Kotlin JVM target if Kotlin plugin is present
+afterEvaluate {
+    if (project.plugins.hasPlugin('org.jetbrains.kotlin.android')) {
+        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            kotlinOptions {
+                jvmTarget = '17'
+            }
+        }
     }
+}
 
     androidResources {
         noCompress 'webp'
@@ -80,6 +88,7 @@ dependencies {
     implementation libs.google.material
     implementation libs.androidx.recyclerview
     implementation libs.androidx.constraintlayout
+    implementation libs.androidx.documentfile
     
     // Performance: Coroutines for background tasks
     implementation libs.kotlinx.coroutines.android
@@ -89,6 +98,7 @@ dependencies {
     implementation libs.fresco.webpsupport
     implementation libs.fresco.animated.webp
     implementation libs.fresco.animated.base
+    implementation libs.facebook.shimmer
     
     compileOnly libs.facebook.infer.annotation
     

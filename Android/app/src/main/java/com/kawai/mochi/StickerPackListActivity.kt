@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.Pair
 
 class StickerPackListActivity : AddStickerPackActivity() {
     private lateinit var packLayoutManager: LinearLayoutManager
@@ -51,6 +52,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { 
         allStickerPacksListAdapter.invalidateAnimationsCache()
+        refreshStickerPacks()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -110,6 +112,20 @@ class StickerPackListActivity : AddStickerPackActivity() {
         runThumbnailMigration()
     }
 
+    private fun refreshStickerPacks() {
+        lifecycleScope.launch {
+            val freshPacks = withContext(Dispatchers.IO) {
+                StickerPackLoader.fetchStickerPacks(this@StickerPackListActivity)
+            }
+            stickerPackList.clear()
+            stickerPackList.addAll(freshPacks)
+            allStickerPacksListAdapter.setStickerPackList(stickerPackList)
+            allStickerPacksListAdapter.notifyDataSetChanged()
+            updateEmptyState()
+            supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+        }
+    }
+
     private fun runThumbnailMigration() {
         lifecycleScope.launch(Dispatchers.IO) {
             val rootFolder = WastickerParser.getStickerFolderPath(this@StickerPackListActivity)
@@ -147,18 +163,41 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private fun importWastickerFile(uri: Uri) {
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    WastickerParser.importStickerPack(this@StickerPackListActivity, uri)
+                val imported = withContext(Dispatchers.IO) {
+                    val importedId = WastickerParser.importStickerPack(this@StickerPackListActivity, uri)
                     StickerContentProvider.getInstance()?.invalidateStickerPackList()
+                    val importedPack = if (!importedId.isNullOrBlank()) {
+                        StickerPackLoader.fetchStickerPack(this@StickerPackListActivity, importedId)
+                    } else {
+                        null
+                    }
+                    Pair(importedId, importedPack)
                 }
-                
-                val freshPacks = StickerPackLoader.fetchStickerPacks(this@StickerPackListActivity)
-                
+
                 Toast.makeText(this@StickerPackListActivity, R.string.pack_imported, Toast.LENGTH_SHORT).show()
-                stickerPackList.clear()
-                stickerPackList.addAll(freshPacks)
-                allStickerPacksListAdapter.setStickerPackList(stickerPackList)
-                allStickerPacksListAdapter.notifyItemInserted(stickerPackList.size - 1)
+
+                val importedId = imported.first
+                val importedPack = imported.second
+                if (importedPack != null) {
+                    val existingIndex = stickerPackList.indexOfFirst { it.identifier == importedId }
+                    if (existingIndex >= 0) {
+                        stickerPackList[existingIndex] = importedPack
+                        allStickerPacksListAdapter.notifyItemChanged(existingIndex)
+                    } else {
+                        stickerPackList.add(importedPack)
+                        allStickerPacksListAdapter.notifyItemInserted(stickerPackList.size - 1)
+                    }
+                } else {
+                    // Fallback: if single-pack fetch fails, refresh all in background.
+                    val freshPacks = withContext(Dispatchers.IO) {
+                        StickerPackLoader.fetchStickerPacks(this@StickerPackListActivity)
+                    }
+                    stickerPackList.clear()
+                    stickerPackList.addAll(freshPacks)
+                    allStickerPacksListAdapter.setStickerPackList(stickerPackList)
+                    allStickerPacksListAdapter.notifyDataSetChanged()
+                }
+
                 updateEmptyState()
                 
                 supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
@@ -247,10 +286,13 @@ class StickerPackListActivity : AddStickerPackActivity() {
         allStickerPacksListAdapter = StickerPackListAdapter(stickerPackList) { pack -> 
             addStickerPackToWhatsApp(pack.identifier, pack.name) 
         }
-        packRecyclerView.adapter = allStickerPacksListAdapter
         packLayoutManager = LinearLayoutManager(this)
         packLayoutManager.orientation = RecyclerView.VERTICAL
         packRecyclerView.layoutManager = packLayoutManager
+        // Keep startup visually stable: disable add/change animations and layout animation.
+        packRecyclerView.itemAnimator = null
+        packRecyclerView.layoutAnimation = null
+        packRecyclerView.adapter = allStickerPacksListAdapter
         packRecyclerView.setHasFixedSize(true)
         packRecyclerView.addOnScrollListener(scrollListener)
         // Modern view caching
