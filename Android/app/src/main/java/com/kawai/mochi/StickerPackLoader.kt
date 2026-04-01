@@ -16,26 +16,16 @@ object StickerPackLoader {
     private const val TAG = "StickerPackLoader"
     private const val METADATA = "metadata"
 
-    /**
-     * For Java compatibility: provides a blocking way to fetch sticker packs.
-     */
     @JvmStatic
     fun fetchStickerPacks(context: Context): ArrayList<StickerPack> = runBlocking {
         ArrayList(fetchStickerPacksAsync(context))
     }
 
-    /**
-     * Fast path for import flow: load only one pack.
-     */
     @JvmStatic
     fun fetchStickerPack(context: Context, identifier: String): StickerPack? = runBlocking {
         fetchStickerPackAsync(context, identifier)
     }
 
-    /**
-     * Fetch sticker packs using Coroutines to avoid blocking the UI thread.
-     * Optimized: Size population is faster and more resilient.
-     */
     suspend fun fetchStickerPacksAsync(context: Context): List<StickerPack> = withContext(Dispatchers.IO) {
         val cursor = context.contentResolver.query(StickerContentProvider.AUTHORITY_URI, null, null, null, null)
             ?: throw IllegalStateException("could not fetch from content provider")
@@ -54,14 +44,23 @@ object StickerPackLoader {
             }
         }
 
-        // Parallelize fetching stickers for all packs.
-        // We defer size population to when it's actually needed (Detail view) or run it more efficiently.
+        val rootPath = WastickerParser.getStickerFolderPath(context)
+        val isSAF = WastickerParser.isCustomPathUri(context)
+        
+        // Pre-fetch directory map for SAF to avoid repeated lookups
+        val packDirsMap = if (isSAF) {
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
+            root?.listFiles()?.filter { it.isDirectory }?.associateBy { it.name }
+        } else null
+
+        // Parallelize fetching stickers and sizes
         val deferreds = dedupedList.map { stickerPack ->
             async {
                 try {
                     val stickers = fetchFromContentProviderForStickers(stickerPack.identifier, context.contentResolver)
+                    // Re-introduced size population with optimizations
+                    populateStickerSizes(context, stickerPack.identifier, stickers, stickerPack.animatedStickerPack, packDirsMap?.get(stickerPack.identifier))
                     stickerPack.setStickers(stickers)
-                    // We set isAnimated on stickers based on the pack flag for fast rendering
                     stickers.forEach { it.isAnimated = stickerPack.animatedStickerPack }
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping invalid pack '${stickerPack.name}': ${e.message}")
@@ -84,7 +83,6 @@ object StickerPackLoader {
             val pack = fetchFromContentProvider(it).firstOrNull() ?: return@withContext null
             return@withContext try {
                 val stickers = fetchFromContentProviderForStickers(pack.identifier, context.contentResolver)
-                // For a single pack (Detail view or Add flow), we do populate sizes.
                 populateStickerSizes(context, pack.identifier, stickers, pack.animatedStickerPack)
                 pack.setStickers(stickers)
                 pack
@@ -95,10 +93,7 @@ object StickerPackLoader {
         }
     }
 
-    /**
-     * Optimized size population. Avoids slow listFiles() on SAF unless necessary.
-     */
-    private fun populateStickerSizes(context: Context, identifier: String, stickers: List<Sticker>, isAnimatedPack: Boolean) {
+    fun populateStickerSizes(context: Context, identifier: String, stickers: List<Sticker>, isAnimatedPack: Boolean, packDirDoc: DocumentFile? = null) {
         if (stickers.isEmpty()) return
 
         val rootPath = WastickerParser.getStickerFolderPath(context)
@@ -112,12 +107,23 @@ object StickerPackLoader {
             return
         }
 
-        // For SAF, point-lookups with AFD are usually faster than listFiles() metadata scan
-        stickers.forEach { sticker ->
-            try {
-                sticker.setSize(fetchStickerAssetLength(identifier, sticker.imageFileName, context.contentResolver))
-            } catch (ignored: Exception) {}
-            sticker.isAnimated = isAnimatedPack
+        try {
+            val packDir = packDirDoc ?: run {
+                val root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
+                root?.findFile(identifier)
+            } ?: return
+            
+            val sizeMap = HashMap<String, Long>()
+            for (file in packDir.listFiles()) {
+                val name = file.name
+                if (name != null && !file.isDirectory) sizeMap[name] = file.length()
+            }
+            stickers.forEach { sticker ->
+                sticker.setSize(sizeMap[sticker.imageFileName] ?: 0L)
+                sticker.isAnimated = isAnimatedPack
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to populate sizes for SAF pack: $identifier", e)
         }
     }
 

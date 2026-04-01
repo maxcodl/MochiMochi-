@@ -36,8 +36,8 @@
         android:id="@+id/sticker_pack_list_item_image"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="fitCenter"
         android:visibility="gone"
+        app:actualImageScaleType="fitCenter"
         app:fadeDuration="0"
         tools:src="@mipmap/ic_launcher_round" />
 

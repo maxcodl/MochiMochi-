@@ -89,6 +89,7 @@ dependencies {
     implementation libs.androidx.recyclerview
     implementation libs.androidx.constraintlayout
     implementation libs.androidx.documentfile
+    implementation libs.androidx.swiperefreshlayout
     
     // Performance: Coroutines for background tasks
     implementation libs.kotlinx.coroutines.android

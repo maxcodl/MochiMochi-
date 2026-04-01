@@ -142,6 +142,36 @@ public class StickerProcessor {
         }
     }
 
+    public static void createThumbnail(File sourceFile, File destFile) throws IOException {
+        Bitmap thumb = decodeAndResize(sourceFile, THUMB_SIZE);
+        if (thumb != null) {
+            saveAsWebP(thumb, destFile, 60);
+            thumb.recycle();
+        }
+    }
+
+    public static void createThumbnail(Context context, Uri sourceUri, Uri destUri) throws IOException {
+        Bitmap thumb = decodeAndResize(context, sourceUri, THUMB_SIZE);
+        if (thumb != null) {
+            saveAsWebP(context, thumb, destUri, 60);
+            thumb.recycle();
+        }
+    }
+
+    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+        if (height > reqHeight || width > reqWidth) {
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+        return inSampleSize;
+    }
+
     public static boolean stripWebPMetadata(File file) {
         try {
             byte[] data = new byte[(int) file.length()];
@@ -166,15 +196,12 @@ public class StickerProcessor {
 
     private static byte[] stripWebPMetadataBytes(byte[] data) {
         if (data.length < 12 || data[0] != 'R' || data[8] != 'W') return null;
-
         ByteBuffer input = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer output = ByteBuffer.allocate(data.length).order(ByteOrder.LITTLE_ENDIAN);
         output.put(data, 0, 12);
-
         int offset = 12;
         boolean modified = false;
         int vp8xPos = -1;
-
         while (offset + 8 <= data.length) {
             input.position(offset);
             byte[] chunkId = new byte[4];
@@ -182,9 +209,7 @@ public class StickerProcessor {
             int chunkSize = input.getInt();
             int paddedSize = (chunkSize + 1) & ~1;
             String type = new String(chunkId);
-
             if ("VP8X".equals(type)) vp8xPos = output.position();
-
             if ("EXIF".equals(type) || "XMP ".equals(type) || "ICCP".equals(type)) {
                 modified = true;
             } else {
@@ -195,15 +220,12 @@ public class StickerProcessor {
             }
             offset += 8 + paddedSize;
         }
-
         if (modified) {
             int finalSize = output.position();
             output.putInt(4, finalSize - 8);
             if (vp8xPos != -1) {
                 int flags = output.get(vp8xPos + 8) & 0xFF;
-                flags &= ~0x20; // ICC
-                flags &= ~0x08; // EXIF
-                flags &= ~0x04; // XMP
+                flags &= ~0x20; flags &= ~0x08; flags &= ~0x04;
                 output.put(vp8xPos + 8, (byte) flags);
             }
             byte[] result = new byte[finalSize];
@@ -211,36 +233,5 @@ public class StickerProcessor {
             return result;
         }
         return null;
-    }
-
-    public static void createThumbnail(File sourceFile, File destFile) throws IOException {
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), options);
-
-        options.inSampleSize = calculateInSampleSize(options, THUMB_SIZE, THUMB_SIZE);
-        options.inJustDecodeBounds = false;
-
-        Bitmap thumb = BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), options);
-        if (thumb != null) {
-            Bitmap result = transform(thumb, THUMB_SIZE);
-            saveAsWebP(result, destFile, 60);
-            result.recycle();
-            thumb.recycle();
-        }
-    }
-
-    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
-        final int height = options.outHeight;
-        final int width = options.outWidth;
-        int inSampleSize = 1;
-        if (height > reqHeight || width > reqWidth) {
-            final int halfHeight = height / 2;
-            final int halfWidth = width / 2;
-            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
-                inSampleSize *= 2;
-            }
-        }
-        return inSampleSize;
     }
 }

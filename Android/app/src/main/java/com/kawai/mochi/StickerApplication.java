@@ -8,9 +8,13 @@
 
 package com.kawai.mochi;
 
+import android.app.ActivityManager;
 import android.app.Application;
+import android.content.Context;
 
+import com.facebook.common.internal.Supplier;
 import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.cache.MemoryCacheParams;
 import com.facebook.imagepipeline.core.DefaultExecutorSupplier;
 import com.facebook.imagepipeline.core.ImagePipelineConfig;
 
@@ -20,15 +24,29 @@ public class StickerApplication extends Application {
     public void onCreate() {
         super.onCreate();
 
-        // Configure Fresco for better performance with animated stickers
+        final ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
         ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
-                .setDownsampleEnabled(true) // Crucial for performance: scales images at decode time
+                .setDownsampleEnabled(true)
+                .setBitmapsConfig(android.graphics.Bitmap.Config.ARGB_8888)
+                .setBitmapMemoryCacheParamsSupplier(new Supplier<MemoryCacheParams>() {
+                    @Override
+                    public MemoryCacheParams get() {
+                        final int maxCacheSize = getMaxCacheSize(activityManager);
+                        return new MemoryCacheParams(
+                                maxCacheSize,
+                                1024, // Increased from 256 to hold more thumbnails
+                                maxCacheSize / 4,
+                                Integer.MAX_VALUE,
+                                Integer.MAX_VALUE,
+                                java.util.concurrent.TimeUnit.MINUTES.toMillis(5)
+                        );
+                    }
+                })
                 .setDiskCacheEnabled(true)
-                .setExecutorSupplier(new DefaultExecutorSupplier(3)) // Increased concurrent decode threads for smoother animations across multiple packs
+                .setExecutorSupplier(new DefaultExecutorSupplier(Runtime.getRuntime().availableProcessors()))
                 .build();
         Fresco.initialize(this, config);
 
-        // Defer seeding of bundled packs to a background thread to avoid blocking startup
         new Thread(() -> {
             try {
                 WastickerParser.seedBundledPacksIfNeeded(getApplicationContext());
@@ -37,11 +55,19 @@ public class StickerApplication extends Application {
             }
         }, "SeedBundledPacks").start();
 
-        // Apply the saved night mode globally (light / dark / system).
-        // DynamicColors (Monet) is applied per-activity in BaseActivity.onCreate()
-        // AFTER the per-activity theme is set, so AMOLED gets the right surfaces.
         android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(themeMode);
+    }
+
+    private int getMaxCacheSize(ActivityManager activityManager) {
+        final int maxMemory = Math.min(activityManager.getMemoryClass() * 1024 * 1024, Integer.MAX_VALUE);
+        if (maxMemory < 32 * 1024 * 1024) {
+            return 4 * 1024 * 1024;
+        } else if (maxMemory < 64 * 1024 * 1024) {
+            return 8 * 1024 * 1024;
+        } else {
+            return maxMemory / 4;
+        }
     }
 }

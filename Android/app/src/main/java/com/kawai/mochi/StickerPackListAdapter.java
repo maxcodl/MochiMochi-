@@ -31,25 +31,22 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
     private boolean isScrolling;
+    
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
-    // Cache so we don't hit SharedPreferences on every bind
     Boolean animationsEnabledCache = null;
 
     StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
         this.stickerPacks = stickerPacks;
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
-        // Performance: Increase pool size to hold enough views for ~5 visible rows
-        sharedPool.setMaxRecycledViews(0, 25);
+        sharedPool.setMaxRecycledViews(0, 50);
     }
 
     public void setScrolling(boolean isScrolling) {
         if (this.isScrolling != isScrolling) {
             this.isScrolling = isScrolling;
-            // When scrolling stops, notify the adapter to resume animations in visible preview strips
-            if (!isScrolling) {
-                notifyItemRangeChanged(0, getItemCount());
-            }
+            // Efficiently notify only about the scroll state change
+            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
         }
     }
 
@@ -65,10 +62,19 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         final LayoutInflater layoutInflater = LayoutInflater.from(context);
         final View stickerPackRow = layoutInflater.inflate(R.layout.sticker_packs_list_item, viewGroup, false);
         StickerPackListItemViewHolder vh = new StickerPackListItemViewHolder(stickerPackRow);
-        
-        // Performance: Use a shared pool for all horizontal preview lists
         vh.imageRowView.setRecycledViewPool(sharedPool);
         return vh;
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull StickerPackListItemViewHolder holder, int position, @NonNull List<Object> payloads) {
+        if (payloads.contains("scroll_state_change")) {
+            if (holder.previewAdapter != null) {
+                holder.previewAdapter.setScrolling(isScrolling);
+            }
+        } else {
+            super.onBindViewHolder(holder, position, payloads);
+        }
     }
 
     @Override
@@ -101,21 +107,20 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
             final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
             List<Sticker> previewStickers = pack.getStickers().subList(0, numToShow);
+            
             if (animationsEnabledCache == null) {
                 animationsEnabledCache = SettingsActivity.isAnimationsEnabled(context);
             }
             boolean animationsEnabled = animationsEnabledCache;
 
             if (viewHolder.previewAdapter != null) {
-                // Reuse existing adapter — Fresco keeps images in memory cache,
-                // so scrolling back to a seen item costs nothing.
                 viewHolder.previewAdapter.updateData(previewStickers, pack.identifier,
                         previewSize, minMarginBetweenImages,
                         pack.animatedStickerPack, animationsEnabled, isScrolling);
             } else {
                 StickerPreviewAdapter adapter = new StickerPreviewAdapter(
                         previewStickers, pack.identifier, previewSize,
-                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled);
+                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled, false, null);
                 adapter.setScrolling(isScrolling);
                 viewHolder.previewAdapter = adapter;
                 viewHolder.imageRowView.setAdapter(adapter);
@@ -157,7 +162,6 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         this.stickerPacks = stickerPackList;
     }
 
-    /** Call when the animations setting changes so the next bind picks up the new value. */
     void invalidateAnimationsCache() {
         animationsEnabledCache = null;
     }

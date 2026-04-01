@@ -151,7 +151,7 @@
                     android:id="@+id/sticker_details_expanded_sticker"
                     android:layout_width="160dp"
                     android:layout_height="160dp"
-                    android:scaleType="centerCrop"
+                    app:actualImageScaleType="fitCenter"
                     tools:src="@mipmap/ic_launcher_round" />
 
                 <TextView

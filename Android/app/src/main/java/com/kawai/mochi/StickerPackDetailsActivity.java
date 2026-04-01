@@ -110,7 +110,6 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         setupExpandedPreview();
         
         setupAdapter();
-        // Disable item animations so stickers don't flicker/fade-in when the grid is first laid out
         recyclerView.setItemAnimator(null);
 
         packNameTextView.setText(stickerPack.name);
@@ -201,7 +200,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
                         @Override
                         public void onStickerHoldEnded() {
-                            hideExpandedPreview();
+                            // No-op here, we want it to stay until explicitly closed
                         }
                     });
             recyclerView.setAdapter(stickerPreviewAdapter);
@@ -210,14 +209,11 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
     private void setupExpandedPreview() {
         expandedStickerOverlay.setOnClickListener(v -> hideExpandedPreview());
-        expandedStickerOverlay.setOnTouchListener((v, event) -> {
-            int action = event.getActionMasked();
-            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                hideExpandedPreview();
-            }
-            return true;
-        });
+        // Remove the OnTouchListener that was hiding it when the finger was lifted
+        expandedStickerOverlay.setOnTouchListener(null);
+        
         expandedStickerCard.setOnClickListener(v -> {
+            // No-op: prevent clicks on the card from closing the overlay
         });
         hideExpandedPreviewImmediate();
     }
@@ -314,7 +310,6 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                 ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(ref.get());
                 for (StickerPack pack : packs) {
                     if (pack.identifier.equals(id)) {
-                        // FIX: Pass 'false' for quickCheck since we want deep validation during reload
                         StickerPackValidator.verifyStickerPackValidity(ref.get(), pack, false);
                         updatedPack = pack;
                         break;
@@ -459,7 +454,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
     @Override
     protected void onResume() {
-        super.onResume();
+        super.onResume()
+        ;
         whitelistCheckCancelled = false;
         WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
         final String id = stickerPack.identifier;

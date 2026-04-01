@@ -92,18 +92,27 @@ public class ImportIndividualStickerActivity extends BaseActivity {
         result.defaultTitle = activity.getString(R.string.imported_pack_default_title);
         result.defaultAuthor = activity.getString(R.string.unknown_author);
         try {
+            // Strictly allow only .wasticker and .idwasticker
             String fileName = null;
             try {
                 fileName = getFileNameFromUri(activity, uri);
             } catch (Exception ignored) {}
             if (fileName == null) fileName = uri.getLastPathSegment();
-            
             String lower = fileName != null ? fileName.toLowerCase() : "";
-            // Accept .webp, .wasticker, .idwasticker
-            if (!(lower.endsWith(".webp") || lower.endsWith(".wasticker") || lower.endsWith(".idwasticker"))) {
-                // Try to check mime type if extension is missing or generic
-                String mime = activity.getContentResolver().getType(uri);
-                if (mime == null || (!mime.contains("webp") && !mime.contains("octet-stream"))) {
+            if (!(lower.endsWith(".wasticker") || lower.endsWith(".idwasticker"))) {
+                result.error = activity.getString(R.string.error_invalid_file_type);
+                return result;
+            }
+
+            // Block ZIP files even if renamed
+            try (InputStream is = activity.getContentResolver().openInputStream(uri)) {
+                if (is == null) {
+                    result.error = activity.getString(R.string.error_cannot_open_file);
+                    return result;
+                }
+                byte[] peek = new byte[2];
+                int peekRead = is.read(peek);
+                if (peekRead >= 2 && peek[0] == 0x50 && peek[1] == 0x4B) {
                     result.error = activity.getString(R.string.error_invalid_file_type);
                     return result;
                 }
@@ -132,7 +141,6 @@ public class ImportIndividualStickerActivity extends BaseActivity {
             try {
                 ArrayList<StickerPack> allPacks = StickerPackLoader.fetchStickerPacks(activity);
                 for (StickerPack pack : allPacks) {
-                    // WhatsApp allows max 30 stickers per pack
                     if (pack.getStickers() != null && pack.getStickers().size() < 30) {
                         result.eligiblePacks.add(pack);
                     }
