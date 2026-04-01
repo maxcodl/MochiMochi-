@@ -278,8 +278,9 @@ public class StickerContentProvider extends ContentProvider {
                             AssetFileDescriptor afd = fetchFile(uri, fileName, identifier);
                             if (afd != null) return afd;
                         } catch (FileNotFoundException ignored) {}
-                        // Fallback to original if thumb missing
-                        return fetchFile(uri, originalFileName, identifier);
+                        // Do not fall back to original for thumbnail requests.
+                        // This prevents high-res files from being served when list previews request thumbs.
+                        throw new FileNotFoundException("Missing thumbnail: " + identifier + "/" + fileName);
                     } else {
                         return fetchFile(uri, fileName, identifier);
                     }

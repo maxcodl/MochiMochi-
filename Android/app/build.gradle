@@ -1,8 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
 }
-// Kotlin plugin is applied only at the top-level with apply false
-// This line has been removed to avoid double application
 
 android {
     namespace = 'com.kawai.mochi'
@@ -57,17 +55,6 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    // kotlinOptions block must be outside android for AGP 9+
-// Set Kotlin JVM target if Kotlin plugin is present
-afterEvaluate {
-    if (project.plugins.hasPlugin('org.jetbrains.kotlin.android')) {
-        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-            kotlinOptions {
-                jvmTarget = '17'
-            }
-        }
-    }
-}
 
     androidResources {
         noCompress 'webp'

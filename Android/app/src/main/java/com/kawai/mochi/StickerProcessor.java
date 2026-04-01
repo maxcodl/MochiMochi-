@@ -22,7 +22,7 @@ public class StickerProcessor {
     private static final String TAG = "StickerProcessor";
     public static final int STICKER_SIZE = 512;
     public static final int TRAY_SIZE = 96;
-    public static final int THUMB_SIZE = 128;
+    public static final int THUMB_SIZE = 32;
 
     public static void processStaticSticker(Context context, Uri uri, File destFile) throws IOException {
         Bitmap bitmap = decodeAndResize(context, uri, STICKER_SIZE);

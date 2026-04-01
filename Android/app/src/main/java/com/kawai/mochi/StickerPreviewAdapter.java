@@ -40,8 +40,10 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
             Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private static final StickerBitmapLruCache bitmapCache = StickerBitmapLruCache.getInstance();
-    private static final int LIST_PREVIEW_DECODE_SIZE_PX = 36;
-    private static final int LIST_ANIMATED_PREVIEW_DECODE_SIZE_PX = 12;
+    
+    // POWER-OF-TWO RESOLUTION: 32px is 1/16th of 512px, which optimizes hardware downsampling
+    private static final int LIST_DECODE_SIZE_PX = 32;
+    private static final int LIST_ANIMATED_DECODE_SIZE_PX = 16;
 
     private List<Sticker> stickers;
     private String packIdentifier;
@@ -132,7 +134,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         holder.sticker = sticker;
         
         String thumbName = "thumbs/thumb_" + sticker.imageFileName;
-        int decodeSize = isGridMode ? previewSize : LIST_PREVIEW_DECODE_SIZE_PX;
+        int decodeSize = isGridMode ? previewSize : LIST_DECODE_SIZE_PX;
         String cacheKey = packIdentifier + "/" + (isGridMode ? sticker.imageFileName : thumbName) + "@" + decodeSize;
 
         if (cacheKey.equals(holder.boundCacheKey)) {
@@ -168,8 +170,10 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         }
 
         if (sticker.isAnimated && animationsEnabled && !isScrolling) {
-            int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_PREVIEW_DECODE_SIZE_PX;
-            bindAnimatedSticker(holder, fullUri, thumbUri, animatedDecodeSize, token);
+            // In list mode, use thumbnail for animated preview to keep resolution low.
+            Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
+            int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_DECODE_SIZE_PX;
+            bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, token);
         }
 
         applyLayout(holder, position);
@@ -182,8 +186,9 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
             if (holder.draweeView.getController() == null) {
                 final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, "thumbs/thumb_" + holder.sticker.imageFileName);
                 final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, holder.sticker.imageFileName);
-                int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_PREVIEW_DECODE_SIZE_PX;
-                bindAnimatedSticker(holder, fullUri, thumbUri, animatedDecodeSize, holder.bindToken);
+                Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
+                int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_DECODE_SIZE_PX;
+                bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, holder.bindToken);
             } else {
                 DraweeController controller = holder.draweeView.getController();
                 if (controller.getAnimatable() != null) controller.getAnimatable().start();
@@ -215,13 +220,14 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         });
     }
 
-    private void bindAnimatedSticker(@NonNull final ViewHolder holder, @NonNull final Uri fullUri, @NonNull final Uri thumbUri,
+    private void bindAnimatedSticker(@NonNull final ViewHolder holder, @NonNull final Uri animatedSourceUri,
+                                     @NonNull final Uri fullUri,
                                      final int decodeSize, final long token) {
         holder.draweeView.setVisibility(View.VISIBLE);
         holder.draweeView.getHierarchy().setActualImageScaleType(ScalingUtils.ScaleType.FIT_CENTER);
         
-        ImageRequest mainRequest = ImageRequestBuilder.newBuilderWithSource(fullUri)
-                // Keep animated decode resolution low in list mode, same strategy as static previews.
+        // For animated stickers, use the source directly (thumb in list, full in grid)
+        ImageRequest mainRequest = ImageRequestBuilder.newBuilderWithSource(animatedSourceUri)
                 .setResizeOptions(new ResizeOptions(decodeSize, decodeSize))
                 .build();
 
@@ -241,7 +247,8 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
                     public void onFailure(String id, Throwable throwable) {
                         if (holder.bindToken == token) {
                             holder.draweeView.setVisibility(View.GONE);
-                            bindStaticSticker(holder, thumbUri, fullUri, decodeSize, holder.boundCacheKey, token);
+                            // If animated thumb cannot be loaded, fall back to low-res static decode.
+                            bindStaticSticker(holder, animatedSourceUri, fullUri, decodeSize, holder.boundCacheKey, token);
                         }
                     }
                 })

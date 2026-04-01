@@ -25,6 +25,7 @@ public class StickerApplication extends Application {
         super.onCreate();
 
         final ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        // FORCE DOWNSAMPLING: This is required for animated WebP resizing to work
         ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
                 .setDownsampleEnabled(true)
                 .setBitmapsConfig(android.graphics.Bitmap.Config.ARGB_8888)
@@ -34,7 +35,7 @@ public class StickerApplication extends Application {
                         final int maxCacheSize = getMaxCacheSize(activityManager);
                         return new MemoryCacheParams(
                                 maxCacheSize,
-                                1024, // Increased from 256 to hold more thumbnails
+                                1024,
                                 maxCacheSize / 4,
                                 Integer.MAX_VALUE,
                                 Integer.MAX_VALUE,
