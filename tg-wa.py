@@ -919,12 +919,71 @@ def _build_contents_json(
     }
 
 class SimpleSticker:
-    """Lightweight sticker descriptor used throughout the bot."""
-    def __init__(self, file_id, is_animated, is_video, emoji):
+    """Lightweight sticker descriptor used throughout the bot.
+
+    ``emojis`` is a list of 1-3 emoji strings associated with this sticker.
+    Pass either a list or a bare string; a bare string is wrapped automatically.
+    """
+    def __init__(self, file_id, is_animated, is_video, emojis):
         self.file_id = file_id
         self.is_animated = is_animated
         self.is_video = is_video
-        self.emoji = emoji
+        if isinstance(emojis, str):
+            self.emojis: list[str] = [emojis] if emojis else ["\U0001F600"]
+        else:
+            self.emojis: list[str] = list(emojis)[:3] if emojis else ["\U0001F600"]
+
+    # Backward-compat shim: code that still reads .emoji gets the primary emoji.
+    @property
+    def emoji(self) -> str:
+        return self.emojis[0] if self.emojis else "\U0001F600"
+
+
+async def fetch_pack_emoji_map(set_name: str) -> dict:
+    """Return {sticker_index: [emoji, ...]} (up to 3 emojis per sticker) for *set_name*.
+
+    Uses pyrogram's MTProto API to access the ``packs`` field of
+    ``messages.getStickerSet``, which maps each emoji to the list of sticker
+    document IDs that belong to that emoji category.  We invert the mapping so
+    callers get a per-sticker emoji list.
+
+    Returns an empty dict on any error so callers can fall back to the single
+    emoji provided by the Bot API.
+    """
+    try:
+        from pyrogram import raw as _raw  # local import to avoid circular issues
+        result = await app.invoke(
+            _raw.functions.messages.GetStickerSet(
+                stickerset=_raw.types.InputStickerSetShortName(short_name=set_name),
+                hash=0,
+            )
+        )
+
+        # result.packs: List[StickerPack] each with .emoticon and .documents (doc IDs)
+        # Build doc_id -> ordered list of emojis (capped at 3).
+        doc_emoji: dict[int, list[str]] = {}
+        for pack in result.packs:
+            for doc_id in pack.documents:
+                lst = doc_emoji.setdefault(doc_id, [])
+                if pack.emoticon not in lst and len(lst) < 3:
+                    lst.append(pack.emoticon)
+
+        # Map by position in result.documents (same order as Bot-API response).
+        index_map: dict[int, list[str]] = {}
+        for idx, doc in enumerate(result.documents):
+            emojis = doc_emoji.get(doc.id)
+            if emojis:
+                index_map[idx] = emojis
+
+        logger.info(
+            f"fetch_pack_emoji_map '{set_name}': "
+            f"{sum(len(v) for v in index_map.values())} total emojis across "
+            f"{len(index_map)} stickers"
+        )
+        return index_map
+    except Exception as e:
+        logger.warning(f"fetch_pack_emoji_map failed for '{set_name}': {e}")
+        return {}
 
 async def create_simple_zip(
     set_name: str,
@@ -1193,11 +1252,9 @@ async def create_wastickers_zip(
                             'warnings': verification['warnings'],
                         }
 
-                    raw_emoji = getattr(sticker, 'emoji', "😀")
-                    emoji_list = emoji.distinct_emoji_list(raw_emoji)
-                    if not emoji_list:
-                        emoji_list = [raw_emoji] if raw_emoji else ["😀"]
-                    emoji_list = emoji_list[:3]
+                    # sticker.emojis is already a clean list (1-3 items) set when
+                    # the SimpleSticker was built.  Fall back to a smiley if empty.
+                    emoji_list = sticker.emojis[:3] if sticker.emojis else ["\U0001F600"]
 
                     return {
                         'index': i,
@@ -2055,20 +2112,29 @@ async def convert_pack(client: Client, message: Message):
         sticker_set = await get_sticker_set_via_bot_api(BOT_TOKEN, pack_name)
         set_title = custom_name if custom_name else sticker_set["title"]
 
+        # Fetch multi-emoji map via MTProto (up to 3 emojis per sticker).
+        # The Bot-API only exposes a single emoji per sticker; the MTProto
+        # 'packs' field contains the full emoji-to-sticker mapping which we
+        # invert here.  Falls back to an empty dict on any error.
+        emoji_index_map = await fetch_pack_emoji_map(pack_name)
+
         # Create sticker list and deduplicate by file_id
         seen_ids = set()
         stickers = []
-        for s in sticker_set["stickers"]:
+        for idx, s in enumerate(sticker_set["stickers"]):
             fid = s["file_id"]
             if fid not in seen_ids:
                 seen_ids.add(fid)
+                # Prefer the MTProto multi-emoji list; fall back to the single
+                # emoji from the Bot API when MTProto data is unavailable.
+                emojis = emoji_index_map.get(idx) or [s.get("emoji", "\U0001F600")]
                 stickers.append(SimpleSticker(
                     fid,
                     s.get("is_animated", False),
                     s.get("is_video", False),
-                    s.get("emoji", "😀")
+                    emojis
                 ))
-        
+
         if len(seen_ids) < len(sticker_set["stickers"]):
             logger.warning(f"Removed {len(sticker_set['stickers']) - len(seen_ids)} duplicate stickers from pack")
         
@@ -2111,7 +2177,9 @@ async def handle_individual_stickers(client: Client, message: Message):
             message.sticker.file_id,
             message.sticker.is_animated,
             message.sticker.is_video,
-            message.sticker.emoji or "😀"
+            # pyrogram Message.sticker only exposes a single emoji; wrap in list
+            # so SimpleSticker's emojis field stays consistent.
+            [message.sticker.emoji or "\U0001F600"]
         ))
         
         keyboard = InlineKeyboardMarkup([

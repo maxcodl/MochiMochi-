@@ -117,7 +117,7 @@
     <!-- Sticker Audit Types -->
     <string name="animated">ANIMATED</string>
     <string name="lossless">LOSSLESS</string>
-    <string name="lossy">LOSSY</string>
+    <string name="lossy">STATIC</string>
 
     <!-- Validation Errors -->
     <string name="title_validation_error">Validation Error</string>
@@ -184,4 +184,22 @@
     <string name="error_cannot_open_file">Cannot open file</string>
     <string name="imported_pack_default_title">Imported Pack</string>
     <string name="error_invalid_file_type">Invalid file type. Only .wasticker and .idwasticker files are supported.</string>
+
+    <!-- Merge Packs -->
+    <string name="merge_packs_menu_item">Merge Packs…</string>
+    <string name="merge_packs_title">Merge Packs</string>
+    <string name="merge_packs_hint">Select 2 or more packs. Up to 30 stickers will be kept.</string>
+    <string name="merge_sticker_count_label">Stickers in merged pack</string>
+    <string name="merge_over_limit">Will be trimmed to 30</string>
+    <string name="merge_button_label">Merge</string>
+    <string name="merge_need_two_packs">Select at least 2 packs to merge</string>
+    <string name="merge_confirm">Merge %1$d stickers from %2$d packs into a new pack?</string>
+    <string name="merge_confirm_capped">Merge into a new pack? Only the first %1$d stickers will be kept (%2$d stickers will be dropped due to WhatsApp\'s 30-sticker limit).</string>
+    <string name="merge_in_progress">Merging packs…</string>
+    <string name="merge_success">Packs merged successfully!</string>
+    <string name="merge_mixed_types_error">Cannot mix animated and static packs</string>
+    <string name="pack_type_animated">Animated</string>
+    <string name="pack_type_static">Static</string>
 </resources>
+
+

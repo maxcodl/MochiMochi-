@@ -73,6 +73,13 @@
             android:exported="false" />
 
         <activity
+            android:name="com.kawai.mochi.MergeStickerPacksActivity"
+            android:exported="false"
+            android:label="@string/merge_packs_title"
+            android:parentActivityName="com.kawai.mochi.StickerPackListActivity" />
+
+
+        <activity
             android:name="com.kawai.mochi.ImportIndividualStickerActivity"
             android:exported="true">
             <!-- Intent filter for .idwasticker files (Individual Stickers) -->

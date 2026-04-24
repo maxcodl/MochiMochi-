@@ -61,6 +61,14 @@ class StickerPackListActivity : AddStickerPackActivity() {
         refreshStickerPacks()
     }
 
+    private val mergePacksLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            refreshStickerPacks()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_sticker_pack_list)
@@ -270,10 +278,9 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 }
                 
                 stickerPackList.removeAt(position)
-                allStickerPacksListAdapter.notifyItemRemoved(position)
-                if (position < stickerPackList.size) {
-                    allStickerPacksListAdapter.notifyItemRangeChanged(position, stickerPackList.size - position)
-                }
+                // notifyDataSetChanged ensures the RecyclerView fully re-lays-out after the
+                // ItemTouchHelper swipe; partial notify calls leave a ghost empty row.
+                allStickerPacksListAdapter.notifyDataSetChanged()
                 updateEmptyState()
                 supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
                 Toast.makeText(this@StickerPackListActivity, R.string.pack_deleted, Toast.LENGTH_SHORT).show()
@@ -283,6 +290,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
             }
         }
     }
+
 
     private fun updateEmptyState() {
         if (stickerPackList.isEmpty()) {
@@ -299,15 +307,23 @@ class StickerPackListActivity : AddStickerPackActivity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(Menu.NONE, 1001, Menu.NONE, R.string.settings)
             .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        menu.add(Menu.NONE, 1002, Menu.NONE, R.string.merge_packs_menu_item)
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.itemId == 1001) {
-            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
-            return true
+        return when (item.itemId) {
+            1001 -> {
+                settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+                true
+            }
+            1002 -> {
+                mergePacksLauncher.launch(Intent(this, MergeStickerPacksActivity::class.java))
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
         }
-        return super.onOptionsItemSelected(item)
     }
 
     override fun onResume() {

@@ -233,19 +233,28 @@ public class WastickerParser {
             JSONObject masterRoot = getOrSeedMasterRoot(context);
             JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
 
+            // Pre-fetch the SAF root once for the entire import — avoids re-opening it per sticker.
+            final boolean isSAF = isCustomPathUri(context);
+            final DocumentFile safRoot = isSAF
+                    ? DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)))
+                    : null;
+
             for (int p = 0; p < packsArray.length(); p++) {
                 JSONObject packJson = packsArray.getJSONObject(p);
                 String identifier = packJson.optString("identifier", UUID.randomUUID().toString());
                 if (firstPackIdentifier == null) firstPackIdentifier = identifier;
 
-                // Create pack directory
-                ensureDirectory(context, identifier);
+                // Create pack directory (internal path or SAF)
+                ensureDirectory(context, identifier, safRoot);
+
+                // Pre-fetch the pack DocumentFile once per pack — avoids one findFile() IPC per sticker.
+                DocumentFile packDirDoc = (safRoot != null) ? safRoot.findFile(identifier) : null;
 
                 // Copy tray and stickers
                 String trayImageFile = packJson.optString("tray_image_file", "tray.png");
                 File traySource = new File(tempDir, trayImageFile);
                 if (traySource.exists()) {
-                    copyToPackFolder(context, traySource, identifier, trayImageFile);
+                    copyToPackFolder(context, traySource, identifier, trayImageFile, packDirDoc);
                 }
 
                 JSONArray stickers = packJson.optJSONArray("stickers");
@@ -254,7 +263,7 @@ public class WastickerParser {
                         String imageFile = stickers.getJSONObject(s).optString("image_file", "");
                         File src = new File(tempDir, imageFile);
                         if (src.exists()) {
-                            copyToPackFolder(context, src, identifier, imageFile);
+                            copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
                         }
                     }
                 }
@@ -275,9 +284,14 @@ public class WastickerParser {
     }
 
     private static void ensureDirectory(Context context, String packId) throws IOException {
+        ensureDirectory(context, packId, null);
+    }
+
+    private static void ensureDirectory(Context context, String packId, DocumentFile preloadedRoot) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+            DocumentFile root = preloadedRoot != null ? preloadedRoot
+                    : DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             if (root == null) throw new IOException("Cannot access custom folder");
             DocumentFile packDir = root.findFile(packId);
             if (packDir == null) root.createDirectory(packId);
@@ -288,10 +302,23 @@ public class WastickerParser {
     }
 
     private static void copyToPackFolder(Context context, File src, String packId, String fileName) throws IOException {
+        copyToPackFolder(context, src, packId, fileName, null);
+    }
+
+    /**
+     * Copies {@code src} into the sticker pack folder, optionally accepting a pre-fetched
+     * {@code packDirDoc} to avoid redundant SAF IPC calls when copying many files into the same pack.
+     */
+    private static void copyToPackFolder(Context context, File src, String packId, String fileName,
+                                         DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-            DocumentFile packDir = root != null ? root.findFile(packId) : null;
+            // Use the pre-fetched pack dir when available; fall back to a fresh lookup otherwise.
+            DocumentFile packDir = packDirDoc;
+            if (packDir == null) {
+                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+                packDir = root != null ? root.findFile(packId) : null;
+            }
             if (packDir == null) throw new IOException("Pack directory not found: " + packId);
             
             DocumentFile destFile = packDir.findFile(fileName);
@@ -524,8 +551,16 @@ public class WastickerParser {
 
         ensureDirectory(context, identifier);
 
+        // Pre-fetch the SAF pack directory once — avoids re-opening root + calling findFile()
+        // inside every processAndSaveImage() call (one IPC per sticker on SAF).
+        DocumentFile preloadedPackDir = null;
+        if (isCustomPathUri(context)) {
+            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)));
+            if (root != null) preloadedPackDir = root.findFile(identifier);
+        }
+
         if (trayUri != null) {
-            processAndSaveImage(context, trayUri, identifier, packJson.getString("tray_image_file"), true);
+            processAndSaveImage(context, trayUri, identifier, packJson.getString("tray_image_file"), true, preloadedPackDir);
         }
 
         JSONArray stickersArray = new JSONArray();
@@ -546,7 +581,7 @@ public class WastickerParser {
             stickersArray.put(stickerJson);
 
             if (item.newUri != null) {
-                processAndSaveImage(context, item.newUri, identifier, fileName, false);
+                processAndSaveImage(context, item.newUri, identifier, fileName, false, preloadedPackDir);
             } else if (item.packIdentifier != null && item.fileName != null) {
                 if (!item.packIdentifier.equals(identifier) || !item.fileName.equals(fileName)) {
                     copyWithinStorage(context, item.packIdentifier, item.fileName, identifier, fileName);
@@ -561,10 +596,23 @@ public class WastickerParser {
     }
 
     private static void processAndSaveImage(Context context, Uri sourceUri, String packId, String fileName, boolean isTray) throws IOException {
+        processAndSaveImage(context, sourceUri, packId, fileName, isTray, null);
+    }
+
+    /**
+     * Processes and saves an image into the sticker pack folder, optionally accepting a
+     * pre-fetched {@code packDirDoc} to avoid redundant SAF IPC calls during batch saves.
+     */
+    private static void processAndSaveImage(Context context, Uri sourceUri, String packId, String fileName,
+                                            boolean isTray, DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-            DocumentFile packDir = root != null ? root.findFile(packId) : null;
+            // Use pre-fetched pack dir when available; fall back to a fresh lookup otherwise.
+            DocumentFile packDir = packDirDoc;
+            if (packDir == null) {
+                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+                packDir = root != null ? root.findFile(packId) : null;
+            }
             if (packDir == null) throw new IOException("Pack directory not found");
             DocumentFile destFile = packDir.findFile(fileName);
             if (destFile == null) destFile = packDir.createFile(isTray ? "image/png" : "image/webp", fileName);
@@ -583,6 +631,7 @@ public class WastickerParser {
     private static void copyWithinStorage(Context context, String srcPackId, String srcFileName, String dstPackId, String dstFileName) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
+            // Open the SAF root once; avoid two separate fromTreeUri() calls.
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile srcDir = root != null ? root.findFile(srcPackId) : null;
             DocumentFile dstDir = root != null ? root.findFile(dstPackId) : null;
@@ -689,4 +738,170 @@ public class WastickerParser {
             while ((len = is.read(buffer)) > 0) os.write(buffer, 0, len);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Pack Merge
+    // -------------------------------------------------------------------------
+
+    /**
+     * Creates a new sticker pack whose stickers are the union of {@code sourcePacks},
+     * capped at {@code maxStickers} (WhatsApp allows at most 30).
+     *
+     * <p>The new pack takes the name and publisher of the first selected pack.
+     * Stickers are added in source-pack order; once the cap is reached the remainder
+     * are silently skipped (the caller already warned the user in the confirmation dialog).
+     *
+     * @param context     Application context.
+     * @param sourcePacks Packs to merge (must be ≥ 2).
+     * @param maxStickers Hard cap on total stickers in the merged pack (≤ 30).
+     */
+    public static void mergeStickerPacks(Context context,
+                                         List<StickerPack> sourcePacks,
+                                         int maxStickers) throws IOException, JSONException {
+        if (sourcePacks == null || sourcePacks.size() < 2) {
+            throw new IllegalArgumentException("Need at least 2 packs to merge");
+        }
+        // WhatsApp packs must be uniformly animated or uniformly static.
+        boolean firstAnimated = sourcePacks.get(0).animatedStickerPack;
+        for (StickerPack p : sourcePacks) {
+            if (p.animatedStickerPack != firstAnimated) {
+                throw new IllegalArgumentException(
+                        "Cannot merge animated and static packs together");
+            }
+        }
+
+        // New pack metadata derived from the first selected pack.
+        String newId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        StickerPack firstPack = sourcePacks.get(0);
+        String mergedName   = firstPack.name   != null ? firstPack.name : "Merged Pack";
+        String mergedAuthor = firstPack.publisher != null ? firstPack.publisher : "Unknown";
+
+        // Create the directory for the new pack.
+        ensureDirectory(context, newId);
+
+        final boolean isSAF = isCustomPathUri(context);
+        final String rootPath = getStickerFolderPath(context);
+
+        // Pre-fetch SAF root + new pack dir once — avoids per-sticker IPC.
+        // NOTE: ensureDirectory already created the dir; use findFile first, then
+        // createDirectory as fallback to handle any SAF DocumentFile cache lag.
+        DocumentFile safRoot    = isSAF ? DocumentFile.fromTreeUri(context, Uri.parse(rootPath)) : null;
+        DocumentFile newPackDir = null;
+        if (safRoot != null) {
+            newPackDir = safRoot.findFile(newId);
+            if (newPackDir == null) newPackDir = safRoot.createDirectory(newId);
+        }
+
+        // Build the sticker JSON array while copying files.
+        JSONArray stickersArray = new JSONArray();
+        int stickerIndex = 1;
+
+        outer:
+        for (StickerPack sourcePack : sourcePacks) {
+            List<Sticker> stickers = sourcePack.getStickers();
+            if (stickers == null) continue;
+
+            // Pre-fetch the source pack dir on SAF (one findFile per source pack, not per sticker).
+            DocumentFile srcPackDir = (safRoot != null) ? safRoot.findFile(sourcePack.identifier) : null;
+
+            for (Sticker sticker : stickers) {
+                if (stickerIndex > maxStickers) break outer;
+
+                String destFileName = stickerIndex + ".webp";
+
+                // Raw copy — stickers already live on device and are valid as-is.
+                if (isSAF) {
+                    if (srcPackDir == null || newPackDir == null) continue;
+                    DocumentFile srcFile  = srcPackDir.findFile(sticker.imageFileName);
+                    if (srcFile == null) continue;
+                    DocumentFile destFile = newPackDir.findFile(destFileName);
+                    if (destFile == null) destFile = newPackDir.createFile("image/webp", destFileName);
+                    if (destFile == null) continue;
+                    try (InputStream is = context.getContentResolver().openInputStream(srcFile.getUri());
+                         OutputStream os = context.getContentResolver().openOutputStream(destFile.getUri())) {
+                        byte[] buf = new byte[8192]; int len;
+                        while ((len = is.read(buf)) > 0) os.write(buf, 0, len);
+                    }
+                } else {
+                    File srcFile  = new File(new File(rootPath, sourcePack.identifier), sticker.imageFileName);
+                    File destFile = new File(new File(rootPath, newId), destFileName);
+                    if (!srcFile.exists()) continue;
+                    copyFile(srcFile, destFile);
+                }
+
+
+                // Build sticker JSON entry, preserving all emojis.
+                JSONObject stickerJson = new JSONObject();
+                stickerJson.put("image_file", destFileName);
+                JSONArray emojis = new JSONArray();
+                if (sticker.emojis != null && !sticker.emojis.isEmpty()) {
+                    for (String e : sticker.emojis) emojis.put(e);
+                } else {
+                    emojis.put("\uD83D\uDE00");
+                }
+                stickerJson.put("emojis", emojis);
+                stickersArray.put(stickerJson);
+                stickerIndex++;
+            }
+        }
+
+        if (stickersArray.length() < 3) {
+            // WhatsApp requires at least 3 stickers — clean up and abort.
+            if (isSAF) {
+                if (newPackDir != null) newPackDir.delete();
+            } else {
+                deleteRecursive(new File(rootPath, newId));
+            }
+            throw new IOException("Merged pack has fewer than 3 stickers. Import the source packs first.");
+        }
+
+        // Copy the tray icon from the first source pack that has one.
+        String trayFile = "tray.png";
+        boolean trayCopied = false;
+        for (StickerPack sourcePack : sourcePacks) {
+            if (sourcePack.trayImageFile == null) continue;
+            if (isSAF) {
+                DocumentFile srcPackDir = safRoot != null ? safRoot.findFile(sourcePack.identifier) : null;
+                DocumentFile srcTray    = srcPackDir != null ? srcPackDir.findFile(sourcePack.trayImageFile) : null;
+                if (srcTray == null) continue;
+                DocumentFile destTray = newPackDir != null ? newPackDir.findFile(trayFile) : null;
+                if (destTray == null && newPackDir != null) destTray = newPackDir.createFile("image/png", trayFile);
+                if (destTray == null) continue;
+                try (InputStream is = context.getContentResolver().openInputStream(srcTray.getUri());
+                     OutputStream os = context.getContentResolver().openOutputStream(destTray.getUri())) {
+                    byte[] buf = new byte[8192]; int len;
+                    while ((len = is.read(buf)) > 0) os.write(buf, 0, len);
+                }
+                trayCopied = true;
+            } else {
+                File srcTray  = new File(new File(rootPath, sourcePack.identifier), sourcePack.trayImageFile);
+                File destTray = new File(new File(rootPath, newId), trayFile);
+                if (!srcTray.exists()) continue;
+                copyFile(srcTray, destTray);
+                trayCopied = true;
+            }
+            if (trayCopied) break;
+        }
+
+        // Write the master contents.json entry.
+        JSONObject masterRoot  = getOrSeedMasterRoot(context);
+        JSONArray  masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) {
+            masterPacks = new JSONArray();
+            masterRoot.put("sticker_packs", masterPacks);
+        }
+
+        JSONObject packJson = new JSONObject();
+        packJson.put("identifier",          newId);
+        packJson.put("name",                mergedName);
+        packJson.put("publisher",           mergedAuthor);
+        packJson.put("tray_image_file",     trayFile);
+        packJson.put("image_data_version",  "1");
+        packJson.put("animated_sticker_pack", firstAnimated);
+        packJson.put("stickers",            stickersArray);
+        masterPacks.put(packJson);
+
+        saveMasterContents(context, masterRoot);
+    }
 }
+

@@ -9,7 +9,7 @@ import android.os.Looper;
 import android.text.format.Formatter;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.view.MotionEvent;
+
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.ImageView;
@@ -33,7 +33,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
-import java.util.ArrayList;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -305,16 +305,11 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
         final String id = stickerPack.identifier;
         executor.execute(() -> {
+            // Use single-pack fetch — avoids loading + size-checking every other pack just to
+            // refresh the one that changed. populateStickerSizes runs inside fetchStickerPackAsync.
             StickerPack updatedPack = null;
             try {
-                ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(ref.get());
-                for (StickerPack pack : packs) {
-                    if (pack.identifier.equals(id)) {
-                        StickerPackValidator.verifyStickerPackValidity(ref.get(), pack, false);
-                        updatedPack = pack;
-                        break;
-                    }
-                }
+                updatedPack = StickerPackLoader.fetchStickerPack(ref.get(), id);
             } catch (Exception ignored) {}
             final StickerPack finalPack = updatedPack;
             mainHandler.post(() -> {

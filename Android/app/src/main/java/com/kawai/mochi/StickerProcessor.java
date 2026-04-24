@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.util.Log;
 
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -84,15 +85,37 @@ public class StickerProcessor {
     }
 
     private static Bitmap decodeAndResize(Context context, Uri uri, int targetSize) throws IOException {
+        // Buffer the full stream once so we can do an inJustDecodeBounds pass without reopening.
+        final byte[] data;
         try (InputStream is = context.getContentResolver().openInputStream(uri)) {
-            Bitmap source = BitmapFactory.decodeStream(is);
-            if (source == null) throw new IOException("Failed to decode image from URI");
-            return transform(source, targetSize);
+            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int len;
+            while ((len = is.read(buf)) > 0) bos.write(buf, 0, len);
+            data = bos.toByteArray();
         }
+        // Pass 1: decode bounds only — no pixel memory allocated.
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+        // Pass 2: decode at reduced resolution.
+        opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize);
+        opts.inJustDecodeBounds = false;
+        Bitmap source = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+        if (source == null) throw new IOException("Failed to decode image from URI");
+        return transform(source, targetSize);
     }
 
     private static Bitmap decodeAndResize(File file, int targetSize) throws IOException {
-        Bitmap source = BitmapFactory.decodeFile(file.getAbsolutePath());
+        // Pass 1: decode bounds only.
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
+        // Pass 2: decode at reduced resolution.
+        opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize);
+        opts.inJustDecodeBounds = false;
+        Bitmap source = BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
         if (source == null) throw new IOException("Failed to decode image from file: " + file.getName());
         return transform(source, targetSize);
     }

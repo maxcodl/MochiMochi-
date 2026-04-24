@@ -118,10 +118,9 @@
         android:layout_margin="24dp"
         android:text="@string/import_label"
         android:visibility="gone"
-        app:cornerRadius="16dp"
         app:elevation="4dp"
         app:icon="@drawable/ic_fab_add"
-        app:iconGravity="textStart"
+        app:iconGravity="start"
         tools:visibility="visible" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

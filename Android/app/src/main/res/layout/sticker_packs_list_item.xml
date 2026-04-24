@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -16,21 +16,6 @@
     <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
-
-        <!-- The Click Overlay: Moved to the beginning of the ConstraintLayout to be behind the text.
-             This resolves the "covered by" accessibility/render warning while still allowing the
-             view to capture clicks (since the views on top are not clickable). -->
-        <View
-            android:id="@+id/details_clickable_area"
-            android:layout_width="0dp"
-            android:layout_height="0dp"
-            android:background="?attr/selectableItemBackground"
-            android:clickable="true"
-            android:focusable="true"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
 
         <TextView
             android:id="@+id/sticker_pack_title"
@@ -125,6 +110,7 @@
             android:orientation="horizontal"
             android:clickable="false"
             android:focusable="false"
+            android:importantForAccessibility="noHideDescendants"
             android:contentDescription="@string/stickers_label"
             app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
             app:layout_constraintBottom_toBottomOf="parent"
@@ -133,7 +119,22 @@
             app:layout_constraintTop_toBottomOf="@id/metadata_container"
             tools:listitem="@layout/sticker_packs_list_image_item" />
 
-        <!-- The Add Button: sits ON TOP of everything else -->
+        <!-- The Click Overlay: Placed AFTER the RecyclerView to sit on top of it.
+             This ensures that clicks anywhere on the card (including over the stickers)
+             trigger the pack opening action. -->
+        <View
+            android:id="@+id/details_clickable_area"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- The Add Button: Defined last to sit on top of the click overlay. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/add_button_on_list"
             style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
@@ -146,6 +147,7 @@
             android:insetRight="0dp"
             android:insetBottom="0dp"
             android:padding="0dp"
+            app:elevation="4dp"
             app:icon="@drawable/sticker_3rdparty_add"
             app:iconGravity="textStart"
             app:iconPadding="0dp"

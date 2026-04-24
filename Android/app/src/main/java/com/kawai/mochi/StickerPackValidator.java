@@ -32,7 +32,7 @@ class StickerPackValidator {
     static final int MAX_STATIC_STICKER_A11Y_TEXT_CHAR_LIMIT = 125;
     static final int MAX_ANIMATED_STICKER_A11Y_TEXT_CHAR_LIMIT = 255;
 
-    private static final int STATIC_STICKER_FILE_LIMIT_KB = 100;
+    private static final int STATIC_STICKER_FILE_LIMIT_KB = 500;
     private static final int ANIMATED_STICKER_FILE_LIMIT_KB = 500;
     private static final int EMOJI_MIN_LIMIT = 1;
     private static final int IMAGE_HEIGHT = 512;
