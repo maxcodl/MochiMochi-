@@ -145,6 +145,17 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         logCard = findViewById(R.id.tg_log_card);
         logScroll = findViewById(R.id.tg_log_scroll);
         logTextView = findViewById(R.id.tg_log_text);
+        
+        logScroll.setOnTouchListener((v, event) -> {
+            int action = event.getAction();
+            if (action == android.view.MotionEvent.ACTION_DOWN || action == android.view.MotionEvent.ACTION_MOVE) {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (action == android.view.MotionEvent.ACTION_UP || action == android.view.MotionEvent.ACTION_CANCEL) {
+                v.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
+        
         copyLogButton = findViewById(R.id.tg_copy_log_button);
         resultsSection = findViewById(R.id.tg_results_section);
         resultsContainer = findViewById(R.id.tg_results_container);
