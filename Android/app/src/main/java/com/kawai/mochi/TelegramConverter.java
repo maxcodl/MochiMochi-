@@ -407,7 +407,7 @@ public class TelegramConverter {
         if (frames.size() < 2) throw new IOException("TGS produced too few frames");
 
         // 5. Encode animated WebP with strict validation gates.
-        byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
+        byte[] encoded = AnimatedWebPEncoder.encode(context, frames, frameDurationMs, WA_ANIMATED_MAX_BYTES);
         validateAnimatedOutput(encoded);
         return encoded;
     }
@@ -515,7 +515,7 @@ public class TelegramConverter {
                 }
             }
 
-            byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
+            byte[] encoded = AnimatedWebPEncoder.encode(context, frames, frameDurationMs, WA_ANIMATED_MAX_BYTES);
             validateAnimatedOutput(encoded);
             return encoded;
         } finally {
