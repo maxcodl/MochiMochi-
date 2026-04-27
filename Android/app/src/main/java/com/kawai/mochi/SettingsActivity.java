@@ -132,6 +132,13 @@ public class SettingsActivity extends BaseActivity {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_ENABLE_ANIMATIONS, isChecked).apply();
         });
 
+        // Telegram Bot Token button
+        Button botTokenButton = findViewById(R.id.telegram_bot_token_button);
+        if (botTokenButton != null) {
+            updateBotTokenButtonState(botTokenButton);
+            botTokenButton.setOnClickListener(v -> showBotTokenManagementDialog(botTokenButton));
+        }
+
         runDiagnosticsButton.setOnClickListener(v -> showPackSelectorForDiagnostics());
         githubButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))));
         telegramButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(TELEGRAM_URL))));
@@ -363,5 +370,78 @@ public class SettingsActivity extends BaseActivity {
                 iv.setImageResource(R.drawable.kidney_meme); iv.setAdjustViewBounds(true);
                 new MaterialAlertDialogBuilder(this).setTitle(R.string.sending_title).setView(iv).setPositiveButton(R.string.done, null).show();
             }).setNegativeButton(R.string.later, null).show();
+    }
+
+    // ── Telegram Bot Token Management ────────────────────────────────────────
+
+    private void updateBotTokenButtonState(Button button) {
+        if (BotTokenManager.isBotTokenSet(this)) {
+            String masked = BotTokenManager.getMaskedToken(this);
+            button.setText(getString(R.string.telegram_bot_token_configured) + "\n" + masked);
+        } else {
+            button.setText(R.string.telegram_bot_token_not_configured);
+        }
+    }
+
+    private void showBotTokenManagementDialog(Button button) {
+        if (BotTokenManager.isBotTokenSet(this)) {
+            // Token is set - show options to view or change
+            String[] options = {
+                    getString(R.string.telegram_bot_token_change),
+                    getString(R.string.telegram_bot_token_remove),
+                    getString(R.string.cancel)
+            };
+
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.telegram_bot_token_manage)
+                    .setItems(options, (dialog, which) -> {
+                        if (which == 0) {
+                            // Change token
+                            BotTokenInputDialog.show(this, getString(R.string.telegram_bot_token_enter_new),
+                                    new BotTokenInputDialog.OnTokenInputListener() {
+                                        @Override
+                                        public void onTokenSaved(String token) {
+                                            updateBotTokenButtonState(button);
+                                            Toast.makeText(SettingsActivity.this, R.string.telegram_bot_token_saved,
+                                                    Toast.LENGTH_SHORT).show();
+                                        }
+
+                                        @Override
+                                        public void onTokenInputCancelled() {
+                                            // Do nothing
+                                        }
+                                    });
+                        } else if (which == 1) {
+                            // Remove token
+                            new MaterialAlertDialogBuilder(this)
+                                    .setTitle(R.string.confirm)
+                                    .setMessage(R.string.telegram_bot_token_confirm_remove)
+                                    .setPositiveButton(R.string.yes, (d, w) -> {
+                                        BotTokenManager.clearBotToken(this);
+                                        updateBotTokenButtonState(button);
+                                        Toast.makeText(SettingsActivity.this, R.string.telegram_bot_token_removed,
+                                                Toast.LENGTH_SHORT).show();
+                                    })
+                                    .setNegativeButton(R.string.no, null)
+                                    .show();
+                        }
+                    })
+                    .show();
+        } else {
+            // Token not set - show input dialog
+            BotTokenInputDialog.show(this, new BotTokenInputDialog.OnTokenInputListener() {
+                @Override
+                public void onTokenSaved(String token) {
+                    updateBotTokenButtonState(button);
+                    Toast.makeText(SettingsActivity.this, R.string.telegram_bot_token_saved,
+                            Toast.LENGTH_SHORT).show();
+                }
+
+                @Override
+                public void onTokenInputCancelled() {
+                    // Do nothing
+                }
+            });
+        }
     }
 }

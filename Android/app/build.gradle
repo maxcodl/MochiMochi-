@@ -17,6 +17,7 @@ android {
         def contentProviderAuthority = applicationId + ".stickercontentprovider"
         manifestPlaceholders = [contentProviderAuthority: contentProviderAuthority]
         buildConfigField("String", "CONTENT_PROVIDER_AUTHORITY", "\"${contentProviderAuthority}\"")
+        // Bot token is now managed at runtime via BotTokenManager (stored in SharedPreferences)
     }
 
     signingConfigs {
@@ -89,6 +90,7 @@ dependencies {
     implementation libs.facebook.shimmer
     
     compileOnly libs.facebook.infer.annotation
+    implementation libs.lottie
     
     testImplementation libs.junit
     androidTestImplementation libs.androidx.test.runner

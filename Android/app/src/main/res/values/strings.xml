@@ -43,6 +43,7 @@
     <string name="edit_author_hint">Author name</string>
     <string name="add_sticker">+ Add Sticker(s)</string>
     <string name="save">Save</string>
+    <string name="save_button">Save</string>
     <string name="remove_sticker">Remove sticker</string>
     <string name="saving">Saving…</string>
     <string name="edit_saved">Changes saved</string>
@@ -148,7 +149,6 @@
     <string name="processing_stickers_title">Processing Stickers...</string>
     <string name="done">Done</string>
     <string name="copy_log">Copy Log</string>
-    <string name="repair_complete">Repair complete.</string>
     <string name="donate_title">❤️ Donate</string>
     <string name="donate_message">I know u poor so send your kidney to Max ❤️</string>
     <string name="donate_positive">Gladly 💌</string>
@@ -200,6 +200,71 @@
     <string name="merge_mixed_types_error">Cannot mix animated and static packs</string>
     <string name="pack_type_animated">Animated</string>
     <string name="pack_type_static">Static</string>
+
+    <!-- Telegram Import -->
+    <string name="import_stickers_title">Import Stickers</string>
+    <string name="import_from_file">Import from file</string>
+    <string name="import_from_telegram">Import from Telegram</string>
+    <string name="telegram_import_title">Import from Telegram</string>
+    <string name="telegram_url_hint">t.me/addstickers/PackName</string>
+    <string name="telegram_author_hint">Author name</string>
+    <string name="telegram_author_default">Maxcodl</string>
+    <string name="telegram_pack_name_hint">Pack name</string>
+    <string name="convert_button">Convert</string>
+    <string name="telegram_conversion_notif_channel_name">Telegram Conversion</string>
+    <string name="telegram_conversion_notif_channel_desc">Background Telegram sticker conversion tasks</string>
+    <string name="telegram_conversion_notif_title">Converting stickers</string>
+    <string name="telegram_conversion_notif_queued">Task queued</string>
+    <string name="telegram_conversion_notif_running">Background conversion running</string>
+    <string name="telegram_conversion_notif_progress">Converting %1$d / %2$d</string>
+    <string name="telegram_conversion_notif_done_title">Conversion completed</string>
+    <string name="telegram_conversion_notif_done_text">%1$d pack(s) ready</string>
+    <string name="telegram_conversion_notif_failed_title">Conversion failed</string>
+    <string name="telegram_conversion_tasks_title">Conversion Tasks</string>
+    <string name="telegram_conversion_tasks_empty">No conversion tasks yet.</string>
+    <string name="telegram_conversion_open_task">Open Conversion</string>
+    <string name="telegram_conversion_task_queued">Queued</string>
+    <string name="telegram_conversion_task_running">Running (%1$d/%2$d)</string>
+    <string name="telegram_conversion_task_done">Done (%1$d packs)</string>
+    <string name="telegram_conversion_task_failed">Failed: %1$s</string>
+    <string name="log_card_title">Conversion log</string>
+    <string name="results_title">Imported packs</string>
+    <string name="static_badge">Static</string>
+    <string name="animated_badge">Animated</string>
+    <string name="tg_fetching_label">Fetching pack info…</string>
+    <string name="tg_progress_label">Converting sticker %1$d / %2$d…</string>
+
+    <!-- Telegram Bot Token Configuration -->
+    <string name="settings_telegram_import_label">TELEGRAM BOT TOKEN</string>
+    <string name="telegram_bot_token_title">Set Telegram Bot Token</string>
+    <string name="telegram_bot_token_description">Enter your Telegram Bot API token. You can create one at https://t.me/BotFather. The token will be securely stored on your device.</string>
+    <string name="telegram_bot_token_hint">123456789:ABCdef...</string>
+    <string name="telegram_bot_token_not_configured">Configure Bot Token</string>
+    <string name="telegram_bot_token_configured">Bot Token Configured</string>
+    <string name="telegram_bot_token_manage">Manage Bot Token</string>
+    <string name="telegram_bot_token_change">Change Token</string>
+    <string name="telegram_bot_token_remove">Remove Token</string>
+    <string name="telegram_bot_token_enter_new">Enter new Telegram Bot Token</string>
+    <string name="telegram_bot_token_confirm_remove">Are you sure you want to remove the bot token? You\'ll need to add it again to import stickers from Telegram.</string>
+    <string name="telegram_bot_token_saved">Bot token saved successfully!</string>
+    <string name="telegram_bot_token_removed">Bot token removed.</string>
+    <string name="telegram_bot_token_required">Bot token is required to import stickers from Telegram.</string>
+    <string name="telegram_bot_token_first_use">To import stickers from Telegram, first configure your bot token in Settings.</string>
+    <string name="telegram_bot_token_invalid_title">Invalid Token Format</string>
+    <string name="telegram_bot_token_invalid_message">The token format is invalid. Please check your token and try again. Format: 123456789:ABCdef...</string>
+
+    <!-- Conversion Dialogs -->
+    <string name="cancel_conversion_title">Cancel Conversion?</string>
+    <string name="cancel_conversion_message">Are you sure you want to cancel the conversion? Progress will be lost.</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="retry">Retry</string>
+    <string name="confirm">Confirm</string>
+    <string name="repair_complete">Repair process complete!</string>
+    <string name="pack_too_small_skipped">Pack has fewer than 3 stickers — skipped</string>
+
+    <plurals name="sticker_count_plural">
+        <item quantity="one">%d sticker</item>
+        <item quantity="other">%d stickers</item>
+    </plurals>
 </resources>
-
-

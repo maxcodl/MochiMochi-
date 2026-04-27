@@ -41,6 +41,14 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private var migrationJob: Job? = null
     private lateinit var itemTouchHelper: ItemTouchHelper
 
+    private val telegramImportLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            refreshStickerPacks()
+        }
+    }
+
     private val scrollListener = object : RecyclerView.OnScrollListener() {
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
             val isScrolling = newState != RecyclerView.SCROLL_STATE_IDLE
@@ -102,8 +110,8 @@ class StickerPackListActivity : AddStickerPackActivity() {
 
         showStickerPackList(stickerPackList)
 
-        findViewById<Button>(R.id.import_button)?.setOnClickListener { openFilePicker() }
-        importFab.setOnClickListener { openFilePicker() }
+        findViewById<Button>(R.id.import_button)?.setOnClickListener { showImportChoice() }
+        importFab.setOnClickListener { showImportChoice() }
 
         swipeRefresh.setOnRefreshListener {
             refreshStickerPacks(true)
@@ -228,6 +236,19 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 }
             }
         }
+    }
+
+    private fun showImportChoice() {
+        val sheet = ImportChoiceBottomSheet.newInstance()
+        sheet.setListener(object : ImportChoiceBottomSheet.Listener {
+            override fun onImportFromFile() { openFilePicker() }
+            override fun onImportFromTelegram() {
+                telegramImportLauncher.launch(
+                    Intent(this@StickerPackListActivity, TelegramImportActivity::class.java)
+                )
+            }
+        })
+        sheet.show(supportFragmentManager, "import_choice")
     }
 
     private fun openFilePicker() {
