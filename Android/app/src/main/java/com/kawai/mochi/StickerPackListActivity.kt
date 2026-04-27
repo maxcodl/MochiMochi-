@@ -166,9 +166,9 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 }
                 stickerPackList.clear()
                 stickerPackList.addAll(freshPacks)
-                
+
                 if (allStickerPacksListAdapter != null) {
-                    allStickerPacksListAdapter!!.submitList(ArrayList(freshPacks))
+                    allStickerPacksListAdapter!!.submitList(ArrayList(stickerPackList))
                 }
                 
                 updateEmptyState()
@@ -309,7 +309,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
 
         // Optimistic remove — update the UI instantly so the row disappears immediately.
         stickerPackList.removeAt(position)
-        allStickerPacksListAdapter.notifyDataSetChanged()
+        allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
         updateEmptyState()
         supportActionBar?.title = resources.getQuantityString(
             R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
@@ -324,7 +324,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
             } catch (e: Exception) {
                 // Roll back the optimistic remove on failure.
                 stickerPackList.add(position.coerceAtMost(stickerPackList.size), pack)
-                allStickerPacksListAdapter.notifyDataSetChanged()
+                allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
                 updateEmptyState()
                 supportActionBar?.title = resources.getQuantityString(
                     R.plurals.title_activity_sticker_packs_list, stickerPackList.size)

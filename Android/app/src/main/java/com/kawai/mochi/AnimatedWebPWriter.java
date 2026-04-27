@@ -7,6 +7,7 @@ import java.nio.ByteOrder;
 import java.util.List;
 
 import android.graphics.Bitmap;
+import android.os.Build;
 
 /**
  * Pure-Java animated WebP RIFF container assembler.
@@ -123,9 +124,12 @@ public class AnimatedWebPWriter {
         try {
             // 1. Encode every frame to static (lossy) WebP bytes
             byte[][] frameData = new byte[frames.size()][];
+            Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    ? Bitmap.CompressFormat.WEBP_LOSSY
+                    : Bitmap.CompressFormat.WEBP;
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
-                frames.get(i).compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, bos);
+                frames.get(i).compress(format, quality, bos);
                 frameData[i] = bos.toByteArray();
             }
 
@@ -185,7 +189,7 @@ public class AnimatedWebPWriter {
         ByteArrayOutputStream out = new ByteArrayOutputStream(18);
         putFourCC(out, "VP8X");
         putLE32(out, 10);              // chunk size
-        out.write(0x02);              // flags: bit 1 = animation
+        out.write(0x12);              // flags: bit 1 = animation, bit 4 = alpha
         out.write(0); out.write(0); out.write(0); // reserved
         putLE24(out, width - 1);       // canvas width − 1
         putLE24(out, height - 1);      // canvas height − 1

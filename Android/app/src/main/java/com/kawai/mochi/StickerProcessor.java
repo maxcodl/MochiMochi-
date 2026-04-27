@@ -24,6 +24,7 @@ public class StickerProcessor {
     public static final int STICKER_SIZE = 512;
     public static final int TRAY_SIZE = 96;
     public static final int THUMB_SIZE = 32;
+    private static final long MAX_IMPORT_BYTES = 40L * 1024L * 1024L;
 
     public static void processStaticSticker(Context context, Uri uri, File destFile) throws IOException {
         Bitmap bitmap = decodeAndResize(context, uri, STICKER_SIZE);
@@ -85,6 +86,15 @@ public class StickerProcessor {
     }
 
     private static Bitmap decodeAndResize(Context context, Uri uri, int targetSize) throws IOException {
+        try (android.content.res.AssetFileDescriptor afd = context.getContentResolver().openAssetFileDescriptor(uri, "r")) {
+            if (afd != null) {
+                long length = afd.getLength();
+                if (length > 0 && length > MAX_IMPORT_BYTES) {
+                    throw new IOException("Image too large: " + length + " bytes");
+                }
+            }
+        }
+
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
 

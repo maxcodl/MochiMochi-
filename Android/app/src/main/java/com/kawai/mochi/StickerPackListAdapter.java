@@ -58,7 +58,8 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
         });
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
-        sharedPool.setMaxRecycledViews(0, 15);
+        // Keep the nested preview pool modest to avoid bitmap/view churn.
+        sharedPool.setMaxRecycledViews(0, 8);
     }
 
     public void setScrolling(boolean isScrolling) {

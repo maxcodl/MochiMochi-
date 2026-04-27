@@ -7,6 +7,8 @@ import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.media.MediaMetadataRetriever;
 import android.util.Log;
+import android.os.Build;
+import android.graphics.Color;
 
 import com.airbnb.lottie.LottieComposition;
 import com.airbnb.lottie.LottieCompositionFactory;
@@ -24,9 +26,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -151,7 +155,7 @@ public class TelegramConverter {
             byte[] rawBytes;
             String fileId;
             boolean isAnimated;
-            String emoji;
+            List<String> emojis;
             boolean isTgsAnim;
             boolean isVideoAnim;
         }
@@ -168,7 +172,7 @@ public class TelegramConverter {
             boolean isTgsAnim = sticker.optBoolean("is_animated", false);
             boolean isVideoAnim = sticker.optBoolean("is_video", false);
             boolean isAnimated = isTgsAnim || isVideoAnim;
-            String emoji = sticker.optString("emoji", "😊");
+            List<String> emojis = extractEmojis(sticker.optString("emoji", ""));
 
             byte[] raw;
             try {
@@ -201,7 +205,7 @@ public class TelegramConverter {
             ds.rawBytes = raw;
             ds.fileId = fileId;
             ds.isAnimated = isAnimated;
-            ds.emoji = emoji;
+            ds.emojis = emojis;
             ds.isTgsAnim = isTgsAnim;
             ds.isVideoAnim = isVideoAnim;
             downloadedStickers.add(ds);
@@ -245,7 +249,7 @@ public class TelegramConverter {
                         converted = convertStaticSticker(ds.rawBytes);
                     }
 
-                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emoji, ds.isAnimated);
+                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emojis, ds.isAnimated);
                     if (ds.isAnimated) animatedEntries.add(entry);
                     else staticEntries.add(entry);
 
@@ -442,8 +446,9 @@ public class TelegramConverter {
             }
 
             Bitmap bmp = Bitmap.createBitmap(STICKER_SIZE, STICKER_SIZE, Bitmap.Config.ARGB_8888);
+            bmp.eraseColor(Color.TRANSPARENT);
             drawable.draw(new Canvas(bmp));
-            if (!isBitmapMostlyTransparent(bmp)) {
+            if (!isBitmapFullyTransparent(bmp)) {
                 frames.add(bmp);
             } else {
                 bmp.recycle();
@@ -533,7 +538,7 @@ public class TelegramConverter {
         }
     }
 
-    private static boolean isBitmapMostlyTransparent(Bitmap bmp) {
+    private static boolean isBitmapFullyTransparent(Bitmap bmp) {
         int w = bmp.getWidth();
         int h = bmp.getHeight();
         int stepX = Math.max(1, w / 16);
@@ -541,7 +546,7 @@ public class TelegramConverter {
         for (int y = 0; y < h; y += stepY) {
             for (int x = 0; x < w; x += stepX) {
                 int alpha = (bmp.getPixel(x, y) >>> 24) & 0xFF;
-                if (alpha > 8) return false;
+                if (alpha > 0) return false;
             }
         }
         return true;
@@ -570,10 +575,13 @@ public class TelegramConverter {
         }
 
         // Fallback: WebP with quality ladder if PNG somehow exceeds 50 KB (extremely rare for 96×96)
+        Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? Bitmap.CompressFormat.WEBP_LOSSY
+                : Bitmap.CompressFormat.WEBP;
         int[] qualities = {90, 75, 50, 25};
         for (int q : qualities) {
             ByteArrayOutputStream wosbos = new ByteArrayOutputStream();
-            canvas.compress(Bitmap.CompressFormat.WEBP_LOSSY, q, wosbos);
+            canvas.compress(format, q, wosbos);
             if (wosbos.size() <= WA_TRAY_MAX_BYTES) {
                 canvas.recycle();
                 return wosbos.toByteArray();
@@ -657,7 +665,9 @@ public class TelegramConverter {
             e.fileName = fname;
             s.put("image_file", fname);
             JSONArray emojis = new JSONArray();
-            emojis.put(e.emoji);
+            for (String emoji : e.emojis) {
+                emojis.put(emoji);
+            }
             s.put("emojis", emojis);
             stickersArray.put(s);
         }
@@ -770,6 +780,26 @@ public class TelegramConverter {
         if (cb != null) cb.onLogReplace(msg);
     }
 
+    private static List<String> extractEmojis(String emojiField) {
+        List<String> emojis = new ArrayList<>(3);
+        if (emojiField == null) emojiField = "";
+
+        BreakIterator it = BreakIterator.getCharacterInstance(Locale.ROOT);
+        it.setText(emojiField);
+        int start = it.first();
+        for (int end = it.next(); end != BreakIterator.DONE; start = end, end = it.next()) {
+            String cluster = emojiField.substring(start, end);
+            if (cluster.trim().isEmpty()) continue;
+            emojis.add(cluster);
+            if (emojis.size() >= 3) break;
+        }
+
+        if (emojis.isEmpty()) {
+            emojis.add("😊");
+        }
+        return emojis;
+    }
+
     private static String getProgressBar(String prefix, int done, int total) {
         if (total <= 0) total = 1;
         int maxBars = 10;
@@ -813,14 +843,14 @@ public class TelegramConverter {
     private static class StickerEntry {
         final String fileId;
         final byte[] converted;
-        final String emoji;
+        final List<String> emojis;
         final boolean animated;
         String fileName; // set during ZIP assembly
 
-        StickerEntry(String fileId, byte[] converted, String emoji, boolean animated) {
+        StickerEntry(String fileId, byte[] converted, List<String> emojis, boolean animated) {
             this.fileId    = fileId;
             this.converted = converted;
-            this.emoji     = emoji;
+            this.emojis    = emojis;
             this.animated  = animated;
         }
     }
