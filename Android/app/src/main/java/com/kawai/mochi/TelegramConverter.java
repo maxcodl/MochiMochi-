@@ -144,19 +144,27 @@ public class TelegramConverter {
         int total = stickers.length();
         log(callback, "📦 Found " + total + " stickers in '" + packTitle + "'");
 
-        // 3. Download + convert every sticker
-        List<StickerEntry> staticEntries   = new ArrayList<>();
-        List<StickerEntry> animatedEntries = new ArrayList<>();
-        int totalSkipped = 0;
+        // 3. Download All First
+        class DownloadedSticker {
+            byte[] rawBytes;
+            String fileId;
+            boolean isAnimated;
+            String emoji;
+            boolean isTgsAnim;
+            boolean isVideoAnim;
+        }
+
+        List<DownloadedSticker> downloadedStickers = new ArrayList<>();
         int consecutiveNetworkDownloadFailures = 0;
+        int downloadSkipped = 0;
 
         for (int i = 0; i < total; i++) {
-            JSONObject sticker   = stickers.getJSONObject(i);
-            String fileId        = sticker.getString("file_id");
-            boolean isTgsAnim    = sticker.optBoolean("is_animated", false);
-            boolean isVideoAnim  = sticker.optBoolean("is_video", false);
-            boolean isAnimated   = isTgsAnim || isVideoAnim;
-            String emoji         = sticker.optString("emoji", "😊");
+            JSONObject sticker = stickers.getJSONObject(i);
+            String fileId = sticker.getString("file_id");
+            boolean isTgsAnim = sticker.optBoolean("is_animated", false);
+            boolean isVideoAnim = sticker.optBoolean("is_video", false);
+            boolean isAnimated = isTgsAnim || isVideoAnim;
+            String emoji = sticker.optString("emoji", "😊");
 
             log(callback, "⬇ Downloading sticker " + (i + 1) + "/" + total + "…");
             byte[] raw;
@@ -164,17 +172,16 @@ public class TelegramConverter {
                 raw = api.downloadFile(fileId);
                 consecutiveNetworkDownloadFailures = 0;
             } catch (Exception e) {
-                totalSkipped++;
+                downloadSkipped++;
                 if (isLikelyNetworkError(e)) {
                     consecutiveNetworkDownloadFailures++;
                 } else {
                     consecutiveNetworkDownloadFailures = 0;
                 }
 
-                log(callback, "⚠ Skipped sticker " + (i + 1) + ": download failed — " + e.getMessage());
+                log(callback, "⚠ Skipped download for sticker " + (i + 1) + ": " + e.getMessage());
                 if (callback != null) callback.onProgress(i + 1, total);
 
-                // If DNS/network is down for a sustained period, stop early instead of importing a broken partial pack.
                 if (consecutiveNetworkDownloadFailures >= MAX_CONSECUTIVE_NETWORK_DOWNLOAD_FAILURES) {
                     throw new IOException(
                             "Network to Telegram API appears unavailable ("
@@ -185,30 +192,80 @@ public class TelegramConverter {
                 continue;
             }
 
-            log(callback, "🔄 Converting sticker " + (i + 1) + "/" + total + " (" + (isAnimated ? "animated" : "static") + ")…");
-            byte[] converted;
-            try {
-                if (isTgsAnim) {
-                    converted = convertTgsSticker(context, raw);
-                } else if (isVideoAnim) {
-                    converted = convertVideoSticker(context, raw);
-                } else {
-                    converted = convertStaticSticker(raw);
-                }
-            } catch (Exception e) {
-                totalSkipped++;
-                log(callback, "⚠ Skipped sticker " + (i + 1) + ": conversion failed — " + e.getMessage());
-                if (callback != null) callback.onProgress(i + 1, total);
-                continue;
-            }
-
-            StickerEntry entry = new StickerEntry(fileId, converted, emoji, isAnimated);
-            if (isAnimated) animatedEntries.add(entry);
-            else            staticEntries.add(entry);
-
+            DownloadedSticker ds = new DownloadedSticker();
+            ds.rawBytes = raw;
+            ds.fileId = fileId;
+            ds.isAnimated = isAnimated;
+            ds.emoji = emoji;
+            ds.isTgsAnim = isTgsAnim;
+            ds.isVideoAnim = isVideoAnim;
+            downloadedStickers.add(ds);
+            
             if (callback != null) callback.onProgress(i + 1, total);
         }
 
+        int totalDownloaded = downloadedStickers.size();
+        if (totalDownloaded == 0) {
+            throw new IOException("Failed to download any stickers. Network or source issue.");
+        }
+
+        log(callback, "✅ Downloaded " + totalDownloaded + " stickers. Starting parallel conversion...");
+
+        // 4. Convert All Parallel
+        List<StickerEntry> staticEntries = Collections.synchronizedList(new ArrayList<>());
+        List<StickerEntry> animatedEntries = Collections.synchronizedList(new ArrayList<>());
+
+        java.util.concurrent.atomic.AtomicInteger conversionSkipped = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger conversionDone = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        int processors = Math.max(2, Runtime.getRuntime().availableProcessors());
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(processors);
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(totalDownloaded);
+
+        for (int i = 0; i < totalDownloaded; i++) {
+            final int index = i;
+            final DownloadedSticker ds = downloadedStickers.get(i);
+
+            executor.submit(() -> {
+                try {
+                    byte[] converted;
+                    if (ds.isTgsAnim) {
+                        converted = convertTgsSticker(context, ds.rawBytes);
+                    } else if (ds.isVideoAnim) {
+                        converted = convertVideoSticker(context, ds.rawBytes);
+                    } else {
+                        converted = convertStaticSticker(ds.rawBytes);
+                    }
+
+                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emoji, ds.isAnimated);
+                    if (ds.isAnimated) animatedEntries.add(entry);
+                    else staticEntries.add(entry);
+
+                } catch (Exception e) {
+                    conversionSkipped.incrementAndGet();
+                    log(callback, "⚠ Skipped sticker conversion: " + e.getMessage());
+                } finally {
+                    int done = conversionDone.incrementAndGet();
+                    log(callback, "🔄 Conversion progress: " + done + "/" + totalDownloaded);
+                    // Update progress assuming progress represents total conversion (0 -> total)
+                    // But we already moved progress bar for downloads. 
+                    // Let's keep it simple: progress is reported overall.
+                    // Wait, we reported progress 1 to total during download. 
+                    // Let's report it again but for conversion. Actually, let's reset progress or just keep it at total.
+                    // For better UX, let's just log it. 
+                    latch.countDown();
+                }
+            });
+        }
+
+        executor.shutdown();
+        try {
+            executor.awaitTermination(30, java.util.concurrent.TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            throw new IOException("Conversion was interrupted.");
+        }
+
+        int totalSkipped = downloadSkipped + conversionSkipped.get();
         int convertedCount = staticEntries.size() + animatedEntries.size();
         log(callback, "✅ Converted: " + staticEntries.size() + " static, " + animatedEntries.size() + " animated"
             + " (skipped " + totalSkipped + ")");

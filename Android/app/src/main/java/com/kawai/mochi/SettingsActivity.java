@@ -139,6 +139,13 @@ public class SettingsActivity extends BaseActivity {
             botTokenButton.setOnClickListener(v -> showBotTokenManagementDialog(botTokenButton));
         }
 
+        Button viewConversionsButton = findViewById(R.id.view_conversions_button);
+        if (viewConversionsButton != null) {
+            viewConversionsButton.setOnClickListener(v -> {
+                startActivity(new Intent(this, ConversionTasksActivity.class));
+            });
+        }
+
         runDiagnosticsButton.setOnClickListener(v -> showPackSelectorForDiagnostics());
         githubButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))));
         telegramButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(TELEGRAM_URL))));

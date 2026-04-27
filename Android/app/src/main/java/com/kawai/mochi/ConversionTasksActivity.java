@@ -30,6 +30,8 @@ public class ConversionTasksActivity extends BaseActivity {
 
         tasksContainer = findViewById(R.id.tasks_container);
         emptyView = findViewById(R.id.tasks_empty);
+        
+        ConversionTaskManager.getInstance().init(this);
     }
 
     @Override

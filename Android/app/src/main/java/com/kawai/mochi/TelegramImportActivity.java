@@ -218,6 +218,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             renderTaskSnapshot();
         }
         
+        ConversionTaskManager.getInstance().init(this);
         updateConvertButtonState();
     }
 

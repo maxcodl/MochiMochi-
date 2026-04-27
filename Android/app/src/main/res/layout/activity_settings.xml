@@ -160,6 +160,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/telegram_bot_token_not_configured"
+                android:layout_marginBottom="8dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/view_conversions_button"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/telegram_conversion_tasks_title"
                 android:layout_marginBottom="24dp" />
 
             <!-- Diagnostics Section -->

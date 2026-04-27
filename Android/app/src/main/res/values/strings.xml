@@ -240,7 +240,7 @@
     <string name="telegram_bot_token_description">Enter your Telegram Bot API token. You can create one at https://t.me/BotFather. The token will be securely stored on your device.</string>
     <string name="telegram_bot_token_hint">123456789:ABCdef...</string>
     <string name="telegram_bot_token_not_configured">Configure Bot Token</string>
-    <string name="telegram_bot_token_configured">Bot Token Configured</string>
+    <string name="telegram_bot_token_configured">Bot Token</string>
     <string name="telegram_bot_token_manage">Manage Bot Token</string>
     <string name="telegram_bot_token_change">Change Token</string>
     <string name="telegram_bot_token_remove">Remove Token</string>

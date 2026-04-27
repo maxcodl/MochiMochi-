@@ -79,6 +79,7 @@ public class TelegramConversionService extends Service {
 
         EXECUTOR.submit(() -> {
             ConversionTaskManager manager = ConversionTaskManager.getInstance();
+            manager.init(getApplicationContext());
             manager.markRunning(taskId);
             manager.appendLog(taskId, "⏳ Task queued in background...");
             broadcastTaskUpdated(taskId);
