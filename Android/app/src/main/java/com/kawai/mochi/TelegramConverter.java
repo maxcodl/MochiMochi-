@@ -541,13 +541,10 @@ public class TelegramConverter {
     private static boolean isBitmapFullyTransparent(Bitmap bmp) {
         int w = bmp.getWidth();
         int h = bmp.getHeight();
-        int stepX = Math.max(1, w / 16);
-        int stepY = Math.max(1, h / 16);
-        for (int y = 0; y < h; y += stepY) {
-            for (int x = 0; x < w; x += stepX) {
-                int alpha = (bmp.getPixel(x, y) >>> 24) & 0xFF;
-                if (alpha > 0) return false;
-            }
+        int[] pixels = new int[w * h];
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h);
+        for (int px : pixels) {
+            if (((px >>> 24) & 0xFF) > 0) return false;
         }
         return true;
     }
