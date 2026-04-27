@@ -85,24 +85,24 @@ public class StickerProcessor {
     }
 
     private static Bitmap decodeAndResize(Context context, Uri uri, int targetSize) throws IOException {
-        // Buffer the full stream once so we can do an inJustDecodeBounds pass without reopening.
-        final byte[] data;
-        try (InputStream is = context.getContentResolver().openInputStream(uri)) {
-            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int len;
-            while ((len = is.read(buf)) > 0) bos.write(buf, 0, len);
-            data = bos.toByteArray();
-        }
-        // Pass 1: decode bounds only — no pixel memory allocated.
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
-        BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+
+        // Pass 1: decode bounds only.
+        try (InputStream is = context.getContentResolver().openInputStream(uri)) {
+            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
+            BitmapFactory.decodeStream(is, null, opts);
+        }
+
         // Pass 2: decode at reduced resolution.
         opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize);
         opts.inJustDecodeBounds = false;
-        Bitmap source = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+        Bitmap source;
+        try (InputStream is = context.getContentResolver().openInputStream(uri)) {
+            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
+            source = BitmapFactory.decodeStream(is, null, opts);
+        }
+
         if (source == null) throw new IOException("Failed to decode image from URI");
         return transform(source, targetSize);
     }

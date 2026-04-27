@@ -99,6 +99,12 @@ public class TelegramConversionService extends Service {
                             }
 
                             @Override
+                            public void onLogReplace(String message) {
+                                manager.updateLastLog(taskId, message);
+                                broadcastTaskUpdated(taskId);
+                            }
+
+                            @Override
                             public void onProgress(int done, int total) {
                                 manager.updateProgress(taskId, done, total);
                                 updateNotification(getString(R.string.telegram_conversion_notif_title),
@@ -133,7 +139,11 @@ public class TelegramConversionService extends Service {
             } finally {
                 int pending = PENDING_TASKS.decrementAndGet();
                 if (pending <= 0) {
-                    stopForeground(STOP_FOREGROUND_DETACH);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_DETACH);
+                    } else {
+                        stopForeground(false);
+                    }
                     stopSelf();
                 }
             }

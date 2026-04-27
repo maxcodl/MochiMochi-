@@ -389,10 +389,11 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
         android.view.MenuItem infoItem = menu.findItem(R.id.action_info);
         if (infoItem != null && infoItem.getIcon() != null) {
-            int[] attrs = {com.google.android.material.R.attr.colorOnSurface};
-            android.content.res.TypedArray ta = getTheme().obtainStyledAttributes(attrs);
-            int color = ta.getColor(0, android.graphics.Color.WHITE);
-            ta.recycle();
+            int color = com.google.android.material.color.MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurface,
+                    android.graphics.Color.WHITE
+            );
             infoItem.getIcon().setTint(color);
         }
         return true;

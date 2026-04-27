@@ -221,6 +221,13 @@ public class ConversionTaskManager {
         // Don't save to prefs on every log to avoid I/O overhead.
     }
 
+    public synchronized void updateLastLog(String taskId, String message) {
+        TaskRecord t = find(taskId);
+        if (t == null || t.logs.isEmpty()) return;
+        t.logs.set(t.logs.size() - 1, message);
+        // Don't save to prefs on every log to avoid I/O overhead.
+    }
+
     public synchronized void markSucceeded(String taskId, List<TaskPackResult> results) {
         TaskRecord t = find(taskId);
         if (t == null) return;

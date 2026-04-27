@@ -83,6 +83,8 @@ public class TelegramConverter {
     public interface ConversionCallback {
         /** Called on a background thread for each log event. */
         void onLog(String message);
+        /** Called to replace the last log line (useful for progress bars). */
+        void onLogReplace(String message);
         /** Called on a background thread as stickers are processed. */
         void onProgress(int done, int total);
     }
@@ -158,6 +160,8 @@ public class TelegramConverter {
         int consecutiveNetworkDownloadFailures = 0;
         int downloadSkipped = 0;
 
+        log(callback, getProgressBar("⬇ Downloading:", 0, total));
+
         for (int i = 0; i < total; i++) {
             JSONObject sticker = stickers.getJSONObject(i);
             String fileId = sticker.getString("file_id");
@@ -166,7 +170,6 @@ public class TelegramConverter {
             boolean isAnimated = isTgsAnim || isVideoAnim;
             String emoji = sticker.optString("emoji", "😊");
 
-            log(callback, "⬇ Downloading sticker " + (i + 1) + "/" + total + "…");
             byte[] raw;
             try {
                 raw = api.downloadFile(fileId);
@@ -180,6 +183,8 @@ public class TelegramConverter {
                 }
 
                 log(callback, "⚠ Skipped download for sticker " + (i + 1) + ": " + e.getMessage());
+                // Add a new progress line so the next loop iteration replaces it
+                log(callback, getProgressBar("⬇ Downloading:", i + 1, total));
                 if (callback != null) callback.onProgress(i + 1, total);
 
                 if (consecutiveNetworkDownloadFailures >= MAX_CONSECUTIVE_NETWORK_DOWNLOAD_FAILURES) {
@@ -201,6 +206,7 @@ public class TelegramConverter {
             ds.isVideoAnim = isVideoAnim;
             downloadedStickers.add(ds);
             
+            logReplace(callback, getProgressBar("⬇ Downloading:", i + 1, total));
             if (callback != null) callback.onProgress(i + 1, total);
         }
 
@@ -210,6 +216,8 @@ public class TelegramConverter {
         }
 
         log(callback, "✅ Downloaded " + totalDownloaded + " stickers. Starting parallel conversion...");
+        log(callback, getProgressBar("🔄 Converting:", 0, totalDownloaded));
+        if (callback != null) callback.onProgress(0, totalDownloaded);
 
         // 4. Convert All Parallel
         List<StickerEntry> staticEntries = Collections.synchronizedList(new ArrayList<>());
@@ -244,15 +252,11 @@ public class TelegramConverter {
                 } catch (Exception e) {
                     conversionSkipped.incrementAndGet();
                     log(callback, "⚠ Skipped sticker conversion: " + e.getMessage());
+                    log(callback, getProgressBar("🔄 Converting:", conversionDone.get(), totalDownloaded));
                 } finally {
                     int done = conversionDone.incrementAndGet();
-                    log(callback, "🔄 Conversion progress: " + done + "/" + totalDownloaded);
-                    // Update progress assuming progress represents total conversion (0 -> total)
-                    // But we already moved progress bar for downloads. 
-                    // Let's keep it simple: progress is reported overall.
-                    // Wait, we reported progress 1 to total during download. 
-                    // Let's report it again but for conversion. Actually, let's reset progress or just keep it at total.
-                    // For better UX, let's just log it. 
+                    logReplace(callback, getProgressBar("🔄 Converting:", done, totalDownloaded));
+                    if (callback != null) callback.onProgress(done, totalDownloaded);
                     latch.countDown();
                 }
             });
@@ -335,9 +339,17 @@ public class TelegramConverter {
         src.recycle();
 
         int quality = 95;
+        Bitmap.CompressFormat format;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            format = Bitmap.CompressFormat.WEBP_LOSSY;
+        } else {
+            // noinspection deprecation
+            format = Bitmap.CompressFormat.WEBP;
+        }
+
         while (quality >= 5) {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            canvas.compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, bos);
+            canvas.compress(format, quality, bos);
             if (bos.size() <= WA_STATIC_MAX_BYTES) {
                 canvas.recycle();
                 return bos.toByteArray();
@@ -350,7 +362,7 @@ public class TelegramConverter {
 
         // Fallback: return at lowest quality anyway
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        canvas.compress(Bitmap.CompressFormat.WEBP_LOSSY, 5, bos);
+        canvas.compress(format, 5, bos);
         canvas.recycle();
         return bos.toByteArray();
     }
@@ -752,6 +764,25 @@ public class TelegramConverter {
     private static void log(ConversionCallback cb, String msg) {
         Log.d(TAG, msg);
         if (cb != null) cb.onLog(msg);
+    }
+
+    private static void logReplace(ConversionCallback cb, String msg) {
+        if (cb != null) cb.onLogReplace(msg);
+    }
+
+    private static String getProgressBar(String prefix, int done, int total) {
+        if (total <= 0) total = 1;
+        int maxBars = 10;
+        int filled = (int) (((float) done / total) * maxBars);
+        StringBuilder sb = new StringBuilder();
+        sb.append(prefix).append(" [");
+        for (int i = 0; i < maxBars; i++) {
+            if (i < filled) sb.append("█");
+            else sb.append("░");
+        }
+        int percent = (int) (((float) done / total) * 100);
+        sb.append("] ").append(percent).append("% (").append(done).append("/").append(total).append(")");
+        return sb.toString();
     }
 
     private static boolean isLikelyNetworkError(Exception e) {

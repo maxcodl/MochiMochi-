@@ -23,9 +23,10 @@ import com.kawai.mochi.R;
 
 import java.util.List;
 
-public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackListItemViewHolder> {
-    @NonNull
-    private List<StickerPack> stickerPacks;
+import androidx.recyclerview.widget.ListAdapter;
+import androidx.recyclerview.widget.DiffUtil;
+
+public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPackListItemViewHolder> {
     @NonNull
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
@@ -35,11 +36,29 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
     Boolean animationsEnabledCache = null;
 
-    StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
-        this.stickerPacks = stickerPacks;
+    StickerPackListAdapter(@NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
+        super(new DiffUtil.ItemCallback<StickerPack>() {
+            @Override
+            public boolean areItemsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
+                return oldItem.identifier.equals(newItem.identifier);
+            }
+
+            @Override
+            public boolean areContentsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
+                // If anything that affects UI changes, return false
+                if (!oldItem.name.equals(newItem.name)) return false;
+                if (!oldItem.publisher.equals(newItem.publisher)) return false;
+                if (oldItem.getTotalSize() != newItem.getTotalSize()) return false;
+                if (oldItem.getIsWhitelisted() != newItem.getIsWhitelisted()) return false;
+                int oldCount = oldItem.getStickers() != null ? oldItem.getStickers().size() : 0;
+                int newCount = newItem.getStickers() != null ? newItem.getStickers().size() : 0;
+                if (oldCount != newCount) return false;
+                return true;
+            }
+        });
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
-        sharedPool.setMaxRecycledViews(0, 50);
+        sharedPool.setMaxRecycledViews(0, 15);
     }
 
     public void setScrolling(boolean isScrolling) {
@@ -52,7 +71,7 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
 
     @Override
     public long getItemId(int position) {
-        return stickerPacks.get(position).identifier.hashCode();
+        return getItem(position).identifier.hashCode();
     }
 
     @NonNull
@@ -79,7 +98,7 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
 
     @Override
     public void onBindViewHolder(@NonNull final StickerPackListItemViewHolder viewHolder, final int index) {
-        StickerPack pack = stickerPacks.get(index);
+        StickerPack pack = getItem(index);
         final Context context = viewHolder.titleView.getContext();
 
         int count = pack.getStickers() != null ? pack.getStickers().size() : 0;
@@ -145,21 +164,12 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         }
     }
 
-    @Override
-    public int getItemCount() {
-        return stickerPacks.size();
-    }
-
     void setImageRowSpec(int maxNumberOfStickersInARow, int minMarginBetweenImages) {
         this.minMarginBetweenImages = minMarginBetweenImages;
         if (this.maxNumberOfStickersInARow != maxNumberOfStickersInARow) {
             this.maxNumberOfStickersInARow = maxNumberOfStickersInARow;
-            notifyDataSetChanged();
+            notifyItemRangeChanged(0, getItemCount());
         }
-    }
-
-    void setStickerPackList(List<StickerPack> stickerPackList) {
-        this.stickerPacks = stickerPackList;
     }
 
     void invalidateAnimationsCache() {

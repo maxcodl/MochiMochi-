@@ -166,8 +166,11 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 }
                 stickerPackList.clear()
                 stickerPackList.addAll(freshPacks)
-                allStickerPacksListAdapter.setStickerPackList(stickerPackList)
-                allStickerPacksListAdapter.notifyDataSetChanged()
+                
+                if (allStickerPacksListAdapter != null) {
+                    allStickerPacksListAdapter!!.submitList(ArrayList(freshPacks))
+                }
+                
                 updateEmptyState()
                 supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
                 
@@ -390,10 +393,11 @@ class StickerPackListActivity : AddStickerPackActivity() {
 
     private var globalLayoutListener: android.view.ViewTreeObserver.OnGlobalLayoutListener? = null
 
-    private fun showStickerPackList(stickerPackList: List<StickerPack>) {
-        allStickerPacksListAdapter = StickerPackListAdapter(stickerPackList) { pack -> 
+    private fun showStickerPackList(packList: List<StickerPack>) {
+        allStickerPacksListAdapter = StickerPackListAdapter { pack -> 
             addStickerPackToWhatsApp(pack.identifier, pack.name) 
         }
+        allStickerPacksListAdapter!!.submitList(packList)
         
         // HIGH PERFORMANCE: Custom LayoutManager with extra pre-fetch space
         packLayoutManager = object : LinearLayoutManager(this) {
@@ -412,8 +416,8 @@ class StickerPackListActivity : AddStickerPackActivity() {
         packRecyclerView.setHasFixedSize(true)
         packRecyclerView.addOnScrollListener(scrollListener)
         
-        // AGGRESSIVE CACHING: Keep 40 rows alive off-screen to prevent "despawning"
-        packRecyclerView.setItemViewCacheSize(40)
+        // AGGRESSIVE CACHING: Removed large manual cache. Relying on default RecyclerView recycling.
+        // packRecyclerView.setItemViewCacheSize(40)
         
         globalLayoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener { recalculateColumnCount() }
         packRecyclerView.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
