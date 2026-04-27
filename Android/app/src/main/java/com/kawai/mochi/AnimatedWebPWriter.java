@@ -231,7 +231,7 @@ public class AnimatedWebPWriter {
         putLE24(out, canvasWidth - 1); // frame_width − 1
         putLE24(out, canvasHeight - 1);// frame_height − 1
         putLE24(out, durationMs);      // frame_duration in ms
-        out.write(0x02);               // flags: blend (preserve transparency), no disposal
+        out.write(0x00);               // flags: blend + no disposal
         out.write(innerChunk);
         if ((anmfDataSize & 1) != 0) out.write(0); // padding byte
         return out.toByteArray();

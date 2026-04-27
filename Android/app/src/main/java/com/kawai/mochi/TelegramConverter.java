@@ -437,13 +437,13 @@ public class TelegramConverter {
 
         for (int i = 0; i < count; i++) {
             int frameToRender = Math.max(firstFrame, Math.min(lastFrame, startFrame + i));
-            try {
-                drawable.setFrame(frameToRender);
-            } catch (Throwable ignored) {
-                float totalFrames = Math.max(1f, composition.getDurationFrames());
-                float progress = Math.min((startFrame + i) / totalFrames, 1f);
-                drawable.setProgress(progress);
+            float progress;
+            if (lastFrame > firstFrame) {
+                progress = (frameToRender - firstFrame) / (float) (lastFrame - firstFrame);
+            } else {
+                progress = 0f;
             }
+            drawable.setProgress(Math.max(0f, Math.min(progress, 1f)));
 
             Bitmap bmp = Bitmap.createBitmap(STICKER_SIZE, STICKER_SIZE, Bitmap.Config.ARGB_8888);
             bmp.eraseColor(Color.TRANSPARENT);
