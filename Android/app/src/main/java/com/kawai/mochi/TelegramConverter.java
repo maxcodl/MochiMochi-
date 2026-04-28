@@ -252,9 +252,9 @@ public class TelegramConverter {
                         converted = convertVideoSticker(context, ds.rawBytes);
                     } else if (animatedWebP) {
                         if (!ds.isAnimated) {
-                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; preserving it as animated");
+                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; re-encoding as animated");
                         }
-                        converted = ds.rawBytes;
+                        converted = convertAnimatedWebPSticker(ds.rawBytes);
                     } else {
                         converted = convertStaticSticker(ds.rawBytes);
                     }
@@ -594,6 +594,32 @@ public class TelegramConverter {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private static byte[] convertAnimatedWebPSticker(byte[] webpData) throws IOException {
+        Bitmap src = BitmapFactory.decodeByteArray(webpData, 0, webpData.length);
+        if (src == null) {
+            throw new IOException("Failed to decode animated WebP sticker");
+        }
+
+        Bitmap canvas = makeCanvas(src, STICKER_SIZE);
+        src.recycle();
+
+        Bitmap duplicate = canvas.copy(Bitmap.Config.ARGB_8888, true);
+        if (duplicate != null) {
+            int px = duplicate.getPixel(0, 0);
+            int alpha = (px >>> 24) & 0xFF;
+            int rgb = px & 0x00FFFFFF;
+            duplicate.setPixel(0, 0, ((alpha == 0 ? 1 : 0) << 24) | rgb);
+        }
+
+        List<Bitmap> frames = new ArrayList<>();
+        frames.add(canvas);
+        if (duplicate != null) {
+            frames.add(duplicate);
+        }
+
+        return AnimatedWebPWriter.encode(frames, 100);
     }
 
     private static boolean isBitmapFullyTransparent(Bitmap bmp) {
