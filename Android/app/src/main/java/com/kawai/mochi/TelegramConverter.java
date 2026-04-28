@@ -252,11 +252,11 @@ public class TelegramConverter {
 
                     byte[] converted;
                     if (ds.isTgsAnim) {
-                        converted = convertTgsSticker(context, ds.rawBytes);
+                        converted = convertTgsSticker(context, ds.rawBytes, callback);
                     } else if (ds.isVideoAnim) {
-                        converted = convertVideoSticker(context, ds.rawBytes);
+                        converted = convertVideoSticker(context, ds.rawBytes, callback);
                     } else if (animatedWebP) {
-                        converted = convertAnimatedWebPSticker(ds.rawBytes);
+                        converted = convertAnimatedWebPSticker(ds.rawBytes, callback);
                     } else {
                         converted = convertStaticSticker(ds.rawBytes);
                     }
@@ -389,12 +389,12 @@ public class TelegramConverter {
      * Converts a TGS (gzip-compressed Lottie JSON) to an animated WebP.
      * Mirror of Python bot's {@code convert_tgs_to_animated_webp()}.
      */
-    static byte[] convertTgsSticker(Context context, byte[] tgsData) throws IOException {
+    static byte[] convertTgsSticker(Context context, byte[] tgsData, ConversionCallback callback) throws IOException {
         // 1. Decompress gzip → JSON string
         byte[] jsonBytes = decompressGzip(tgsData);
 
         // 2. Parse Lottie composition first and use its authoritative frame metadata.
-        LottieComposition composition = parseLottieSync(jsonBytes);
+        LottieComposition composition = parseLottieSync(jsonBytes, callback);
         if (composition == null) throw new IOException("Failed to parse Lottie composition");
 
         float fps = composition.getFrameRate();
@@ -406,13 +406,13 @@ public class TelegramConverter {
         );
         int frameDurationMs = Math.max(8, (int) (1000f / Math.max(1f, fps)));
 
-        Log.d(TAG, "TGS meta: fps=" + fps
-                + " frames=" + firstFrame + ".." + lastFrame
-                + " rendering=" + renderFrames
-                + " durationMs=" + frameDurationMs);
+        logVerbose(callback, "TGS meta: fps=" + fps
+            + " frames=" + firstFrame + ".." + lastFrame
+            + " rendering=" + renderFrames
+            + " durationMs=" + frameDurationMs);
 
         // 3. Render frames.
-        List<Bitmap> frames = renderLottieFrames(composition, firstFrame, renderFrames);
+        List<Bitmap> frames = renderLottieFrames(composition, firstFrame, renderFrames, callback);
         if (frames.size() < 2) throw new IOException("TGS produced too few frames");
 
         // 4. Encode animated WebP with strict validation gates.
@@ -423,7 +423,7 @@ public class TelegramConverter {
             try {
                 File dbg = File.createTempFile("dbg_tgs_", ".webp", context.getCacheDir());
                 try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                Log.d("TelegramConverter", "TGS debug output: " + dbg.getAbsolutePath()
+                logVerbose(callback, "TGS debug output: " + dbg.getAbsolutePath()
                         + " bytes=" + (encoded != null ? encoded.length : 0)
                         + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
                         + " frames=" + AnimatedWebPWriter.countFrames(encoded));
@@ -437,7 +437,7 @@ public class TelegramConverter {
                 try {
                     File dbg = File.createTempFile("dbg_tgs_fail_", ".webp", context.getCacheDir());
                     try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                    Log.d("TelegramConverter", "TGS validation failed — dumped: " + dbg.getAbsolutePath()
+                            logVerbose(callback, "TGS validation failed — dumped: " + dbg.getAbsolutePath()
                             + " bytes=" + encoded.length
                             + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
                             + " frames=" + AnimatedWebPWriter.countFrames(encoded));
@@ -448,7 +448,7 @@ public class TelegramConverter {
     }
 
     /** Synchronously parses a Lottie composition from JSON bytes. */
-    private static LottieComposition parseLottieSync(byte[] jsonBytes) {
+    private static LottieComposition parseLottieSync(byte[] jsonBytes, ConversionCallback callback) {
         try {
             String jsonString = new String(jsonBytes, "UTF-8");
             com.airbnb.lottie.LottieResult<LottieComposition> result = 
@@ -456,19 +456,20 @@ public class TelegramConverter {
             LottieComposition composition = result.getValue();
             if (composition == null) {
                 Throwable exception = result.getException();
-                Log.e(TAG, "Lottie parse returned null: "
+                logError(callback, "Lottie parse returned null: "
                         + (exception != null ? exception.getMessage() : "unknown"),
                         exception);
             }
             return composition;
         } catch (Exception e) {
-            Log.e(TAG, "parseLottieSync threw: " + e.getMessage(), e);
+            logError(callback, "parseLottieSync threw: " + e.getMessage(), e);
             return null;
         }
     }
 
     /** Renders {@code count} frames starting at {@code startFrame} from a Lottie composition. */
-    private static List<Bitmap> renderLottieFrames(LottieComposition composition, int startFrame, int count) {
+    private static List<Bitmap> renderLottieFrames(LottieComposition composition, int startFrame, int count,
+                                                   ConversionCallback callback) {
         List<Bitmap> frames = new ArrayList<>();
         LottieDrawable drawable = new LottieDrawable();
         drawable.setComposition(composition);
@@ -502,13 +503,13 @@ public class TelegramConverter {
             }
         }
         if (allBlank) {
-            Log.e(TAG, "renderLottieFrames: all " + frames.size() + " frames are transparent");
+            logError(callback, "renderLottieFrames: all " + frames.size() + " frames are transparent", null);
             for (Bitmap frame : frames) {
                 frame.recycle();
             }
             frames.clear();
         } else {
-            Log.d(TAG, "renderLottieFrames: rendered " + frames.size() + " frames");
+            logVerbose(callback, "renderLottieFrames: rendered " + frames.size() + " frames");
         }
         return frames;
     }
@@ -519,7 +520,7 @@ public class TelegramConverter {
      * Converts a WebM video sticker to animated WebP using {@link MediaMetadataRetriever}.
      * Mirror of Python bot's {@code convert_video_to_animated_webp()}.
      */
-    static byte[] convertVideoSticker(Context context, byte[] webmData) throws IOException {
+    static byte[] convertVideoSticker(Context context, byte[] webmData, ConversionCallback callback) throws IOException {
         // Write to temp file — MediaMetadataRetriever needs a file path or FileDescriptor
         File tmpFile = File.createTempFile("tg_sticker_", ".webm", context.getCacheDir());
         try {
@@ -571,15 +572,20 @@ public class TelegramConverter {
                 }
             }
 
+            logVerbose(callback, "Video source: durationMs=" + durationMs
+                    + " fps=" + actualFps
+                    + " frameCount=" + frameCount
+                    + " frameDurationMs=" + frameDurationMs);
+
             byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
             // Dump debug copy
             try {
                 File dbg = File.createTempFile("dbg_video_", ".webp", context.getCacheDir());
                 try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                Log.d("TelegramConverter", "Video debug output: " + dbg.getAbsolutePath()
-                        + " bytes=" + (encoded != null ? encoded.length : 0)
-                        + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
-                        + " frames=" + AnimatedWebPWriter.countFrames(encoded));
+                logVerbose(callback, "Video debug output: " + dbg.getAbsolutePath()
+                    + " bytes=" + (encoded != null ? encoded.length : 0)
+                    + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
+                    + " frames=" + AnimatedWebPWriter.countFrames(encoded));
             } catch (Exception ignored) {}
 
             validateAnimatedOutput(encoded);
@@ -616,7 +622,7 @@ public class TelegramConverter {
         }
     }
 
-    private static byte[] convertAnimatedWebPSticker(byte[] webpData) throws IOException {
+    private static byte[] convertAnimatedWebPSticker(byte[] webpData, ConversionCallback callback) throws IOException {
         WebPImage image = WebPImage.createFromByteArray(webpData, ImageDecodeOptions.defaults());
         if (image == null) {
             throw new IOException("Failed to decode animated WebP sticker");
@@ -626,6 +632,11 @@ public class TelegramConverter {
         if (frameCount < 2) {
             throw new IOException("Animated WebP sticker contains fewer than 2 frames");
         }
+
+        logVerbose(callback, "Animated WebP source: width=" + image.getWidth()
+                + " height=" + image.getHeight()
+                + " frameCount=" + frameCount
+                + " durationMs=" + image.getDuration());
 
         List<Bitmap> frames = new ArrayList<>(Math.min(frameCount, MAX_FRAMES));
         int[] durations = image.getFrameDurations();
@@ -685,6 +696,9 @@ public class TelegramConverter {
         int frameDurationMs = totalDuration > 0
                 ? Math.max(8, totalDuration / frames.size())
                 : 100;
+        logVerbose(callback, "Animated WebP render: composedFrames=" + frames.size()
+            + " frameDurationMs=" + frameDurationMs
+            + " totalDuration=" + totalDuration);
         return AnimatedWebPWriter.encode(frames, frameDurationMs);
     }
 
@@ -922,6 +936,21 @@ public class TelegramConverter {
     private static void log(ConversionCallback cb, String msg) {
         Log.d(TAG, msg);
         if (cb != null) cb.onLog(msg);
+    }
+
+    private static void logVerbose(ConversionCallback cb, String msg) {
+        Log.d(TAG, msg);
+        if (cb != null) cb.onLog(msg);
+    }
+
+    private static void logError(ConversionCallback cb, String msg, Throwable error) {
+        Log.e(TAG, msg, error);
+        if (cb != null) {
+            cb.onLog("❌ " + msg);
+            if (error != null) {
+                cb.onLog(android.util.Log.getStackTraceString(error));
+            }
+        }
     }
 
     private static void logReplace(ConversionCallback cb, String msg) {

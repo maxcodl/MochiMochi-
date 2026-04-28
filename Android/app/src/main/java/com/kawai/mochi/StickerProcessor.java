@@ -132,6 +132,7 @@ public class StickerProcessor {
 
     private static Bitmap transform(Bitmap source, int targetSize) {
         Bitmap result = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888);
+        result.eraseColor(android.graphics.Color.TRANSPARENT);
         Canvas canvas = new Canvas(result);
         float scale = Math.min((float) targetSize / source.getWidth(), (float) targetSize / source.getHeight());
         float dx = (targetSize - source.getWidth() * scale) * 0.5f;
