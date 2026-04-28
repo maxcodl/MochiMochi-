@@ -8,6 +8,7 @@ import java.util.List;
 
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.util.Log;
 
 /**
  * Pure-Java animated WebP RIFF container assembler.
@@ -27,6 +28,8 @@ import android.os.Build;
  *   Pass 3 – frame decimation 2×/3×/4× if still over limit
  */
 public class AnimatedWebPWriter {
+
+    private static final String TAG = "AnimatedWebPWriter";
 
     private static final int MAX_SIZE_BYTES = 490 * 1024; // 490 KB target (500 KB hard)
 
@@ -61,6 +64,9 @@ public class AnimatedWebPWriter {
             for (int quality : qualityLadder) {
                 byte[] result = tryEncode(cur, curDuration, quality);
                 if (result != null && result.length <= MAX_SIZE_BYTES) {
+                    Log.d(TAG, "encode: success frames=" + cur.size()
+                            + " quality=" + quality + " decimation=" + decimation
+                            + " out=" + result.length);
                     return result;
                 }
             }
@@ -134,8 +140,10 @@ public class AnimatedWebPWriter {
             }
 
             // 2. Assemble RIFF container
-            return buildRiff(frameData, durationMs, frames.get(0).getWidth(), frames.get(0).getHeight());
+            byte[] out = buildRiff(frameData, durationMs, frames.get(0).getWidth(), frames.get(0).getHeight());
+            return out;
         } catch (Exception e) {
+            Log.d(TAG, "tryEncode: exception", e);
             return null;
         }
     }
@@ -189,7 +197,7 @@ public class AnimatedWebPWriter {
         ByteArrayOutputStream out = new ByteArrayOutputStream(18);
         putFourCC(out, "VP8X");
         putLE32(out, 10);              // chunk size
-        out.write(0x12);              // flags: bit 1 = animation, bit 4 = alpha
+        out.write(0x0A);              // flags: animation + alpha (matches WhatsApp stickers)
         out.write(0); out.write(0); out.write(0); // reserved
         putLE24(out, width - 1);       // canvas width − 1
         putLE24(out, height - 1);      // canvas height − 1
@@ -231,7 +239,7 @@ public class AnimatedWebPWriter {
         putLE24(out, canvasWidth - 1); // frame_width − 1
         putLE24(out, canvasHeight - 1);// frame_height − 1
         putLE24(out, durationMs);      // frame_duration in ms
-        out.write(0x00);               // flags: blend + no disposal
+        out.write(0x00);               // flags: matches WhatsApp sample (default blend/dispose)
         out.write(innerChunk);
         if ((anmfDataSize & 1) != 0) out.write(0); // padding byte
         return out.toByteArray();

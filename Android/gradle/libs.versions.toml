@@ -15,7 +15,6 @@ inferAnnotation = "0.18.0"
 shimmer = "0.5.0"
 swiperefreshlayout = "1.1.0"
 lottie = "6.4.0"
-ffmpegKit = "4.5.LTS"
 
 [libraries]
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
@@ -34,7 +33,6 @@ fresco-animated-base = { group = "com.facebook.fresco", name = "animated-base", 
 facebook-infer-annotation = { group = "com.facebook.infer.annotation", name = "infer-annotation", version.ref = "inferAnnotation" }
 facebook-shimmer = { group = "com.facebook.shimmer", name = "shimmer", version.ref = "shimmer" }
 lottie = { group = "com.airbnb.android", name = "lottie", version.ref = "lottie" }
-ffmpeg-kit-full = { group = "com.arthenica", name = "ffmpeg-kit-full", version.ref = "ffmpegKit" }
 
 # Kotlin Coroutines for performance
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }

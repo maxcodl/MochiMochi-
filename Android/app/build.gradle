@@ -91,7 +91,6 @@ dependencies {
     
     compileOnly libs.facebook.infer.annotation
     implementation libs.lottie
-    implementation libs.ffmpeg.kit.full
     
     testImplementation libs.junit
     androidTestImplementation libs.androidx.test.runner

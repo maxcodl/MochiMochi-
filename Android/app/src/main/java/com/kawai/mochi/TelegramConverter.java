@@ -407,9 +407,35 @@ public class TelegramConverter {
         if (frames.size() < 2) throw new IOException("TGS produced too few frames");
 
         // 5. Encode animated WebP with strict validation gates.
-        byte[] encoded = AnimatedWebPEncoder.encode(context, frames, frameDurationMs, WA_ANIMATED_MAX_BYTES);
-        validateAnimatedOutput(encoded);
-        return encoded;
+        byte[] encoded = null;
+        try {
+            encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
+            // Dump a debug copy to cache for inspection and logging
+            try {
+                File dbg = File.createTempFile("dbg_tgs_", ".webp", context.getCacheDir());
+                try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
+                Log.d("TelegramConverter", "TGS debug output: " + dbg.getAbsolutePath()
+                        + " bytes=" + (encoded != null ? encoded.length : 0)
+                        + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
+                        + " frames=" + AnimatedWebPWriter.countFrames(encoded));
+            } catch (Exception ignored) {}
+
+            validateAnimatedOutput(encoded);
+            return encoded;
+        } catch (IOException e) {
+            // If validation fails, still dump bytes for offline inspection
+            if (encoded != null) {
+                try {
+                    File dbg = File.createTempFile("dbg_tgs_fail_", ".webp", context.getCacheDir());
+                    try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
+                    Log.d("TelegramConverter", "TGS validation failed — dumped: " + dbg.getAbsolutePath()
+                            + " bytes=" + encoded.length
+                            + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
+                            + " frames=" + AnimatedWebPWriter.countFrames(encoded));
+                } catch (Exception ignored) {}
+            }
+            throw e;
+        }
     }
 
     /** Synchronously parses a Lottie composition from JSON bytes. */
@@ -515,7 +541,17 @@ public class TelegramConverter {
                 }
             }
 
-            byte[] encoded = AnimatedWebPEncoder.encode(context, frames, frameDurationMs, WA_ANIMATED_MAX_BYTES);
+            byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
+            // Dump debug copy
+            try {
+                File dbg = File.createTempFile("dbg_video_", ".webp", context.getCacheDir());
+                try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
+                Log.d("TelegramConverter", "Video debug output: " + dbg.getAbsolutePath()
+                        + " bytes=" + (encoded != null ? encoded.length : 0)
+                        + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
+                        + " frames=" + AnimatedWebPWriter.countFrames(encoded));
+            } catch (Exception ignored) {}
+
             validateAnimatedOutput(encoded);
             return encoded;
         } finally {
