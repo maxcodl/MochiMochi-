@@ -135,11 +135,11 @@ public class AnimatedWebPWriter {
         try {
             // 1. Encode every frame to static (lossy) WebP bytes
             byte[][] frameData = new byte[frames.size()][];
-            // Keep lossy frame encoding for size efficiency. Animated output is constrained
-            // to <= 500 KB, and WEBP_LOSSLESS frequently exceeds this envelope even with
-            // aggressive frame decimation, causing full-pack conversion failures.
+            // Use lossless frame compression when available to preserve alpha fidelity.
+            // Lossy WebP frame encoding on some Android devices can introduce opaque black
+            // backgrounds when those frames are later repackaged into ANMF chunks.
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                    ? Bitmap.CompressFormat.WEBP_LOSSY
+                    ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
@@ -351,20 +351,13 @@ public class AnimatedWebPWriter {
         }
         java.util.List<Bitmap> scaled = new java.util.ArrayList<>(frames.size());
         for (Bitmap f : frames) {
-            int canvasW = f.getWidth();
-            int canvasH = f.getHeight();
-            int contentW = Math.max(16, Math.round(canvasW * scale));
-            int contentH = Math.max(16, Math.round(canvasH * scale));
-
-            Bitmap out = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888);
-            android.graphics.Canvas c = new android.graphics.Canvas(out);
-            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
-            android.graphics.Rect src = new android.graphics.Rect(0, 0, canvasW, canvasH);
-            int left = (canvasW - contentW) / 2;
-            int top = (canvasH - contentH) / 2;
-            android.graphics.Rect dst = new android.graphics.Rect(left, top, left + contentW, top + contentH);
-            c.drawBitmap(f, src, dst, p);
-            scaled.add(out);
+            int w = Math.max(64, Math.round(f.getWidth() * scale));
+            int h = Math.max(64, Math.round(f.getHeight() * scale));
+            if (w == f.getWidth() && h == f.getHeight()) {
+                scaled.add(f);
+            } else {
+                scaled.add(Bitmap.createScaledBitmap(f, w, h, true));
+            }
         }
         return scaled;
     }
