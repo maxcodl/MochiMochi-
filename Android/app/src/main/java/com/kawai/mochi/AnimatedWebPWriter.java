@@ -205,7 +205,7 @@ public class AnimatedWebPWriter {
         ByteArrayOutputStream out = new ByteArrayOutputStream(18);
         putFourCC(out, "VP8X");
         putLE32(out, 10);              // chunk size
-        out.write(0x0A);              // flags: animation + alpha (matches WhatsApp stickers)
+        out.write(0x12);              // flags: alpha + animation
         out.write(0); out.write(0); out.write(0); // reserved
         putLE24(out, width - 1);       // canvas width − 1
         putLE24(out, height - 1);      // canvas height − 1
