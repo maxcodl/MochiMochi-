@@ -131,10 +131,14 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     };
 
     @Override
-    protected void showProgressBar() {
+    protected void showProgressBar(String message) {
         if (progressBar != null) {
             progressBar.setIndeterminate(true);
             progressBar.setVisibility(View.VISIBLE);
+        }
+        if (progressText != null && message != null) {
+            progressText.setText(message);
+            progressText.setVisibility(View.VISIBLE);
         }
     }
 
@@ -142,6 +146,23 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     protected void hideProgressBar() {
         if (progressBar != null) {
             progressBar.setVisibility(View.GONE);
+        }
+        if (progressText != null) {
+            progressText.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
+    protected void updateProgress(int current, int total, String message) {
+        if (progressBar != null) {
+            progressBar.setVisibility(View.VISIBLE);
+            progressBar.setIndeterminate(false);
+            progressBar.setMax(total);
+            progressBar.setProgress(current, true);
+        }
+        if (progressText != null && message != null) {
+            progressText.setText(message);
+            progressText.setVisibility(View.VISIBLE);
         }
     }
 

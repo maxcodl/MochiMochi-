@@ -49,12 +49,19 @@ class StickerPackValidator {
     private static final String PLAY_STORE_DOMAIN = "play.google.com";
     private static final String APPLE_STORE_DOMAIN = "itunes.apple.com";
 
+    public interface ValidationProgressCallback {
+        void onProgress(int current, int total);
+    }
 
     /**
      * Checks whether a sticker pack contains valid data.
      * Optimized: quickCheck skips deep file decoding for stickers if they have been checked before.
      */
     static void verifyStickerPackValidity(@NonNull Context context, @NonNull StickerPack stickerPack, boolean quickCheck) throws IllegalStateException {
+        verifyStickerPackValidity(context, stickerPack, quickCheck, null);
+    }
+
+    static void verifyStickerPackValidity(@NonNull Context context, @NonNull StickerPack stickerPack, boolean quickCheck, @Nullable ValidationProgressCallback callback) throws IllegalStateException {
         if (TextUtils.isEmpty(stickerPack.identifier)) {
             throw new IllegalStateException("sticker pack identifier is empty");
         }
@@ -78,7 +85,6 @@ class StickerPackValidator {
             throw new IllegalStateException("sticker pack tray id is empty, sticker pack identifier:" + stickerPack.identifier);
         }
         
-        // Website validations... (unchanged)
         if (!TextUtils.isEmpty(stickerPack.androidPlayStoreLink) && !isValidWebsiteUrl(stickerPack.androidPlayStoreLink)) {
             throw new IllegalStateException("Make sure to include http or https in url links, android play store link is not a valid url: " + stickerPack.androidPlayStoreLink);
         }
@@ -91,7 +97,6 @@ class StickerPackValidator {
             if (stickerAssetBytes.length > TRAY_IMAGE_FILE_SIZE_MAX_KB * KB_IN_BYTES) {
                 throw new IllegalStateException("tray image should be less than " + TRAY_IMAGE_FILE_SIZE_MAX_KB + " KB, tray image file: " + stickerPack.trayImageFile);
             }
-            // Quick check: Tray dimensions are usually okay if it's already in the list
             if (!quickCheck) {
                 Bitmap bitmap = BitmapFactory.decodeByteArray(stickerAssetBytes, 0, stickerAssetBytes.length);
                 if (bitmap != null) {
@@ -105,14 +110,16 @@ class StickerPackValidator {
         }
 
         final List<Sticker> stickers = stickerPack.getStickers();
-        // Lower bound only — packs with >30 stickers are allowed in local storage.
-        // The app splits them into ≤30-sticker chunks when sending to WhatsApp.
         if (stickers.size() < STICKER_SIZE_MIN) {
             throw new IllegalStateException("sticker pack must have at least " + STICKER_SIZE_MIN + " stickers");
         }
         
-        for (final Sticker sticker : stickers) {
-            validateSticker(context, stickerPack.identifier, sticker, stickerPack.animatedStickerPack, quickCheck);
+        int total = stickers.size();
+        for (int i = 0; i < total; i++) {
+            validateSticker(context, stickerPack.identifier, stickers.get(i), stickerPack.animatedStickerPack, quickCheck);
+            if (callback != null) {
+                callback.onProgress(i + 1, total);
+            }
         }
     }
 
@@ -124,7 +131,6 @@ class StickerPackValidator {
             throw new IllegalStateException("no file path for sticker");
         }
         
-        // Fast file size check (no decode)
         long fileSize = sticker.size;
         if (fileSize <= 0) {
             try {
@@ -139,7 +145,6 @@ class StickerPackValidator {
             throw new IllegalStateException("animated sticker > 500KB: " + sticker.imageFileName);
         }
 
-        // Only decode if full validation is requested
         if (!quickCheck) {
             validateStickerFile(context, identifier, sticker.imageFileName, animatedStickerPack);
         }

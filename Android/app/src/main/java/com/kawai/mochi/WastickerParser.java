@@ -240,9 +240,11 @@ public class WastickerParser {
             }
 
             int totalStickersAllPacks = 0;
-            for (int p = 0; p < packsArray.length(); p++) {
-                JSONArray stickers = packsArray.getJSONObject(p).optJSONArray("stickers");
-                if (stickers != null) totalStickersAllPacks += stickers.length();
+            if (packsArray != null) {
+                for (int p = 0; p < packsArray.length(); p++) {
+                    JSONArray stickers = packsArray.getJSONObject(p).optJSONArray("stickers");
+                    if (stickers != null) totalStickersAllPacks += stickers.length();
+                }
             }
 
             int stickersProcessed = 0;
@@ -256,44 +258,46 @@ public class WastickerParser {
                     ? DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)))
                     : null;
 
-            for (int p = 0; p < packsArray.length(); p++) {
-                JSONObject packJson = packsArray.getJSONObject(p);
-                String identifier = packJson.optString("identifier", UUID.randomUUID().toString());
-                if (firstPackIdentifier == null) firstPackIdentifier = identifier;
+            if (packsArray != null) {
+                for (int p = 0; p < packsArray.length(); p++) {
+                    JSONObject packJson = packsArray.getJSONObject(p);
+                    String identifier = packJson.optString("identifier", UUID.randomUUID().toString());
+                    if (firstPackIdentifier == null) firstPackIdentifier = identifier;
 
-                // Create pack directory (internal path or SAF)
-                ensureDirectory(context, identifier, safRoot);
+                    // Create pack directory (internal path or SAF)
+                    ensureDirectory(context, identifier, safRoot);
 
-                // Pre-fetch the pack DocumentFile once per pack — avoids one findFile() IPC per sticker.
-                DocumentFile packDirDoc = (safRoot != null) ? safRoot.findFile(identifier) : null;
+                    // Pre-fetch the pack DocumentFile once per pack — avoids one findFile() IPC per sticker.
+                    DocumentFile packDirDoc = (safRoot != null) ? safRoot.findFile(identifier) : null;
 
-                // Copy tray and stickers
-                String trayImageFile = packJson.optString("tray_image_file", "tray.png");
-                File traySource = new File(tempDir, trayImageFile);
-                if (traySource.exists()) {
-                    copyToPackFolder(context, traySource, identifier, trayImageFile, packDirDoc);
-                }
+                    // Copy tray and stickers
+                    String trayImageFile = packJson.optString("tray_image_file", "tray.png");
+                    File traySource = new File(tempDir, trayImageFile);
+                    if (traySource.exists()) {
+                        copyToPackFolder(context, traySource, identifier, trayImageFile, packDirDoc);
+                    }
 
-                JSONArray stickers = packJson.optJSONArray("stickers");
-                if (stickers != null) {
-                    for (int s = 0; s < stickers.length(); s++) {
-                        String imageFile = stickers.getJSONObject(s).optString("image_file", "");
-                        File src = new File(tempDir, imageFile);
-                        if (src.exists()) {
-                            copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
-                        }
-                        stickersProcessed++;
-                        if (callback != null) {
-                            callback.onProgress(stickersProcessed, totalStickersAllPacks);
+                    JSONArray stickers = packJson.optJSONArray("stickers");
+                    if (stickers != null) {
+                        for (int s = 0; s < stickers.length(); s++) {
+                            String imageFile = stickers.getJSONObject(s).optString("image_file", "");
+                            File src = new File(tempDir, imageFile);
+                            if (src.exists()) {
+                                copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
+                            }
+                            stickersProcessed++;
+                            if (callback != null) {
+                                callback.onProgress(stickersProcessed, totalStickersAllPacks);
+                            }
                         }
                     }
+                    
+                    // Ensure version exists before merging
+                    if (!packJson.has("image_data_version")) {
+                        packJson.put("image_data_version", "1");
+                    }
+                    masterPacks.put(packJson);
                 }
-                
-                // Ensure version exists before merging
-                if (!packJson.has("image_data_version")) {
-                    packJson.put("image_data_version", "1");
-                }
-                masterPacks.put(packJson);
             }
 
             saveMasterContents(context, masterRoot);

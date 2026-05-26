@@ -24,6 +24,14 @@
             app:title="@string/telegram_import_title"
             app:titleTextColor="?attr/colorOnSurface" />
 
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/tg_progress_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:indeterminate="false"
+            android:visibility="gone"
+            app:trackCornerRadius="0dp" />
+
     </com.google.android.material.appbar.AppBarLayout>
 
     <!-- Scrollable content -->
@@ -131,16 +139,6 @@
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
-
-            <!-- Progress indicator (hidden until converting) -->
-            <com.google.android.material.progressindicator.LinearProgressIndicator
-                android:id="@+id/tg_progress_bar"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
-                android:indeterminate="false"
-                android:visibility="gone"
-                app:trackCornerRadius="4dp" />
 
             <TextView
                 android:id="@+id/tg_progress_text"

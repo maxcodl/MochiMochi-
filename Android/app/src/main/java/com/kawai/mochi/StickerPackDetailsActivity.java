@@ -74,19 +74,41 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private boolean expandedPreviewVisible;
     private volatile boolean whitelistCheckCancelled;
     private ActivityResultLauncher<Intent> editPackLauncher;
+    
+    private View progressContainer;
     private LinearProgressIndicator progressBar;
+    private TextView progressStatusText;
 
     @Override
-    protected void showProgressBar() {
-        if (progressBar != null) {
-            progressBar.setVisibility(View.VISIBLE);
+    protected void showProgressBar(String message) {
+        if (progressContainer != null) {
+            progressContainer.setVisibility(View.VISIBLE);
+            if (progressBar != null) progressBar.setIndeterminate(true);
+            if (progressStatusText != null) {
+                progressStatusText.setText(message != null ? message : getString(R.string.add_to_whatsapp));
+            }
         }
     }
 
     @Override
     protected void hideProgressBar() {
-        if (progressBar != null) {
-            progressBar.setVisibility(View.GONE);
+        if (progressContainer != null) {
+            progressContainer.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
+    protected void updateProgress(int current, int total, String message) {
+        if (progressContainer != null) {
+            progressContainer.setVisibility(View.VISIBLE);
+            if (progressBar != null) {
+                progressBar.setIndeterminate(false);
+                progressBar.setMax(total);
+                progressBar.setProgressCompat(current, true);
+            }
+            if (progressStatusText != null && message != null) {
+                progressStatusText.setText(message);
+            }
         }
     }
 
@@ -98,7 +120,9 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
+        progressContainer = findViewById(R.id.details_progress_container);
         progressBar = findViewById(R.id.details_progress_bar);
+        progressStatusText = findViewById(R.id.details_progress_status_text);
 
         boolean showUpButton = getIntent().getBooleanExtra(EXTRA_SHOW_UP_BUTTON, false);
         stickerPack = getIntent().getParcelableExtra(EXTRA_STICKER_PACK_DATA);

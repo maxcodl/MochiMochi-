@@ -113,21 +113,6 @@ public class TelegramConverter {
     public static List<ImportedPackResult> importFromUrl(
             Context context,
             String urlOrName,
-            ConversionCallback callback) throws Exception {
-        return importFromUrl(context, urlOrName, "Telegram", "", callback);
-    }
-
-    public static List<ImportedPackResult> importFromUrl(
-            Context context,
-            String urlOrName,
-            String authorName,
-            ConversionCallback callback) throws Exception {
-        return importFromUrl(context, urlOrName, authorName, "", callback);
-    }
-
-    public static List<ImportedPackResult> importFromUrl(
-            Context context,
-            String urlOrName,
             String authorName,
             String customPackName,
             ConversionCallback callback) throws Exception {
@@ -155,6 +140,8 @@ public class TelegramConverter {
             throw new IOException("No stickers found in pack");
         }
         int total = stickers.length();
+        // Total progress steps: download (total) + convert (total)
+        int overallTotal = total * 2;
         log(callback, "📦 Found " + total + " stickers in '" + packTitle + "'");
 
         // 3. Download All First
@@ -196,7 +183,7 @@ public class TelegramConverter {
                 log(callback, "⚠ Skipped download for sticker " + (i + 1) + ": " + e.getMessage());
                 // Add a new progress line so the next loop iteration replaces it
                 log(callback, getProgressBar("⬇ Downloading:", i + 1, total));
-                if (callback != null) callback.onProgress(i + 1, total);
+                if (callback != null) callback.onProgress(i + 1, overallTotal);
 
                 if (consecutiveNetworkDownloadFailures >= MAX_CONSECUTIVE_NETWORK_DOWNLOAD_FAILURES) {
                     throw new IOException(
@@ -218,7 +205,7 @@ public class TelegramConverter {
             downloadedStickers.add(ds);
             
             logReplace(callback, getProgressBar("⬇ Downloading:", i + 1, total));
-            if (callback != null) callback.onProgress(i + 1, total);
+            if (callback != null) callback.onProgress(i + 1, overallTotal);
         }
 
         int totalDownloaded = downloadedStickers.size();
@@ -228,7 +215,8 @@ public class TelegramConverter {
 
         log(callback, "✅ Downloaded " + totalDownloaded + " stickers. Starting parallel conversion...");
         log(callback, getProgressBar("🔄 Converting:", 0, totalDownloaded));
-        if (callback != null) callback.onProgress(0, totalDownloaded);
+        // Progress was at (total downloaded / overallTotal), now continues
+        if (callback != null) callback.onProgress(total, overallTotal);
 
         // 4. Convert All Parallel
         List<StickerEntry> staticEntries = Collections.synchronizedList(new ArrayList<>());
@@ -242,7 +230,6 @@ public class TelegramConverter {
         java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(totalDownloaded);
 
         for (int i = 0; i < totalDownloaded; i++) {
-            final int index = i;
             final DownloadedSticker ds = downloadedStickers.get(i);
 
             executor.submit(() -> {
@@ -272,7 +259,7 @@ public class TelegramConverter {
                 } finally {
                     int done = conversionDone.incrementAndGet();
                     logReplace(callback, getProgressBar("🔄 Converting:", done, totalDownloaded));
-                    if (callback != null) callback.onProgress(done, totalDownloaded);
+                    if (callback != null) callback.onProgress(total + done, overallTotal);
                     latch.countDown();
                 }
             });
@@ -582,7 +569,6 @@ public class TelegramConverter {
                 // which preserves the alpha plane from VP9 Profile 1/3 (used by Telegram)
                 Bitmap frame;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
                     frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
                 } else {
                     frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);

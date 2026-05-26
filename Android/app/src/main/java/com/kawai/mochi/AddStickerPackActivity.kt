@@ -75,8 +75,9 @@ abstract class AddStickerPackActivity : BaseActivity() {
 
     // ── Progress Bar Hooks ───────────────────────────────────────────────────
 
-    protected abstract fun showProgressBar()
+    protected abstract fun showProgressBar(message: String?)
     protected abstract fun hideProgressBar()
+    protected abstract fun updateProgress(current: Int, total: Int, message: String?)
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ abstract class AddStickerPackActivity : BaseActivity() {
             return
         }
 
-        showProgressBar()
+        showProgressBar(getString(R.string.add_to_whatsapp))
         lifecycleScope.launch {
             try {
                 val targetPack = withContext(Dispatchers.IO) {
@@ -111,7 +112,11 @@ abstract class AddStickerPackActivity : BaseActivity() {
                     withContext(Dispatchers.Default) {
                         StickerPackValidator.verifyStickerPackValidity(
                             this@AddStickerPackActivity, targetPack, true
-                        )
+                        ) { current, total ->
+                            lifecycleScope.launch(Dispatchers.Main) {
+                                updateProgress(current, total, getString(R.string.validation_progress, current, total))
+                            }
+                        }
                     }
                     hideProgressBar()
                     proceedWithLaunch(identifier, stickerPackName)
@@ -161,13 +166,9 @@ abstract class AddStickerPackActivity : BaseActivity() {
         val chunk = pendingChunks.removeAt(0)
         val partNumber = currentChunkIndex + 1
 
-        Toast.makeText(
-            this,
-            getString(R.string.chunk_add_progress, partNumber, totalChunkCount),
-            Toast.LENGTH_SHORT
-        ).show()
+        val progressMsg = getString(R.string.chunk_add_progress, partNumber, totalChunkCount)
+        updateProgress(partNumber, totalChunkCount, progressMsg)
 
-        showProgressBar()
         lifecycleScope.launch {
             try {
                 // Find the original pack to source sticker files from.
@@ -182,7 +183,11 @@ abstract class AddStickerPackActivity : BaseActivity() {
                 withContext(Dispatchers.IO) {
                     StickerPackChunkManager.registerChunk(
                         this@AddStickerPackActivity, chunk, originalPack
-                    )
+                    ) { current, total ->
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            updateProgress(current, total, getString(R.string.import_progress, current, total))
+                        }
+                    }
                 }
 
                 currentChunkIndex++
@@ -191,8 +196,15 @@ abstract class AddStickerPackActivity : BaseActivity() {
                 withContext(Dispatchers.Default) {
                     StickerPackValidator.verifyStickerPackValidity(
                         this@AddStickerPackActivity, chunk, true
-                    )
+                    ) { current, total ->
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            updateProgress(current, total, getString(R.string.validation_progress, current, total))
+                        }
+                    }
                 }
+
+                // Briefly show intent preparation is done
+                updateProgress(totalChunkCount, totalChunkCount, progressMsg)
 
                 hideProgressBar()
                 proceedWithLaunch(chunk.identifier, chunk.name)

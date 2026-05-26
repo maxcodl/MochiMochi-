@@ -94,6 +94,11 @@ public class StickerPackChunkManager {
         return chunks;
     }
 
+    public static void registerChunk(Context context, StickerPack chunk, StickerPack original)
+            throws IOException, JSONException {
+        registerChunk(context, chunk, original, null);
+    }
+
     /**
      * Materializes a chunk pack on disk so that the
      * {@link StickerContentProvider} can serve it to WhatsApp.
@@ -106,10 +111,12 @@ public class StickerPackChunkManager {
      * @param context  app context
      * @param chunk    chunk pack returned by {@link #splitIntoChunks}
      * @param original the source pack (provides sticker files)
+     * @param callback optional progress callback
      * @throws IOException   if any file operation fails
      * @throws JSONException if the master contents file cannot be updated
      */
-    public static void registerChunk(Context context, StickerPack chunk, StickerPack original)
+    public static void registerChunk(Context context, StickerPack chunk, StickerPack original,
+                                     WastickerParser.ImportProgressCallback callback)
             throws IOException, JSONException {
 
         final boolean isSAF = WastickerParser.isCustomPathUri(context);
@@ -120,22 +127,8 @@ public class StickerPackChunkManager {
                 ? DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
                 : null;
         DocumentFile origPackDirDoc = null;
-
-        if (isSAF) {
-            if (safRoot == null) throw new IOException("SAF root inaccessible");
-            // Create chunk directory
-            if (safRoot.findFile(chunk.identifier) == null) {
-                safRoot.createDirectory(chunk.identifier);
-            }
-            origPackDirDoc = safRoot.findFile(original.identifier);
-        } else {
-            File chunkDir = new File(rootPath, chunk.identifier);
-            if (!chunkDir.exists() && !chunkDir.mkdirs()) {
-                throw new IOException("Cannot create chunk directory: " + chunkDir);
-            }
-        }
-
         DocumentFile chunkPackDirDoc = null;
+
         if (isSAF) {
             if (safRoot == null) throw new IOException("SAF root inaccessible");
             chunkPackDirDoc = safRoot.findFile(chunk.identifier);
@@ -163,16 +156,21 @@ public class StickerPackChunkManager {
         // ── 3. Copy sticker files ─────────────────────────────────────────
         List<Sticker> stickers = chunk.getStickers();
         if (stickers != null) {
-            for (Sticker s : stickers) {
+            int total = stickers.size();
+            for (int i = 0; i < total; i++) {
+                Sticker s = stickers.get(i);
                 copyFileWithinStorage(context, isSAF, rootPath,
                         original.identifier, s.imageFileName,
                         chunk.identifier, s.imageFileName,
                         origPackDirDoc, chunkPackDirDoc);
+                if (callback != null) {
+                    callback.onProgress(i + 1, total);
+                }
             }
         }
 
         // ── 4. Register in master contents.json ───────────────────────────
-        addChunkToMasterContents(context, chunk, original);
+        addChunkToMasterContents(context, chunk);
 
         // ── 5. Invalidate content provider cache ──────────────────────────
         StickerContentProvider provider = StickerContentProvider.getInstance();
@@ -260,10 +258,15 @@ public class StickerPackChunkManager {
             }
             DocumentFile dstFile = dstPackDirDoc.findFile(dstFileName);
             if (dstFile == null) {
-                dstFile = dstPackDirDoc.createFile("image/*", dstFileName);
+                dstFile = dstPackDirDoc.createFile(getMimeTypeFromName(dstFileName), dstFileName);
             }
             if (dstFile == null) {
                 throw new IOException("Cannot create SAF file: " + dstFileName + " in chunk: " + dstPackId);
+            }
+            String actualName = dstFile.getName();
+            if (actualName != null && !actualName.equals(dstFileName)) {
+                // Some SAF providers append extensions; try to normalize to the requested name.
+                dstFile.renameTo(dstFileName);
             }
 
             try (InputStream is = context.getContentResolver().openInputStream(srcFile.getUri());
@@ -340,6 +343,10 @@ public class StickerPackChunkManager {
             if (dstFile == null) {
                 throw new IOException("Cannot create SAF tray file: " + trayFileName);
             }
+            String actualName = dstFile.getName();
+            if (actualName != null && !actualName.equals(trayFileName)) {
+                dstFile.renameTo(trayFileName);
+            }
             StickerProcessor.processTrayIcon(context, srcFile.getUri(), dstFile.getUri());
         } else {
             File srcDir = new File(rootPath, original.identifier);
@@ -362,14 +369,14 @@ public class StickerPackChunkManager {
     private static void deleteRecursive(File f) {
         if (f.isDirectory()) {
             File[] children = f.listFiles();
-            if (children != null) for (File c : children) deleteRecursive(c);
+            if (children != null) for (File child : children) deleteRecursive(child);
         }
         f.delete();
     }
 
     // ── contents.json ─────────────────────────────────────────────────────────
 
-    private static void addChunkToMasterContents(Context context, StickerPack chunk, StickerPack original)
+    private static void addChunkToMasterContents(Context context, StickerPack chunk)
             throws IOException, JSONException {
 
         JSONObject masterRoot = WastickerParser.getOrSeedMasterRootPublic(context);
@@ -439,5 +446,13 @@ public class StickerPackChunkManager {
         }
         masterRoot.put("sticker_packs", updated);
         WastickerParser.saveMasterContentsPublic(context, masterRoot);
+    }
+
+    private static String getMimeTypeFromName(String fileName) {
+        if (fileName == null) return "image/*";
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".webp")) return "image/webp";
+        return "image/*";
     }
 }

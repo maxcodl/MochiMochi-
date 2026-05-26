@@ -5,9 +5,12 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.kawai.mochi.R;
 
 import java.io.BufferedOutputStream;
@@ -23,10 +26,17 @@ import java.util.concurrent.Executors;
 public class ImportIndividualStickerActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newCachedThreadPool();
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
+    
+    private LinearProgressIndicator progressBar;
+    private TextView statusText;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_import_individual_sticker);
+        
+        progressBar = findViewById(R.id.import_progress_bar);
+        statusText = findViewById(R.id.import_status_text);
 
         Intent intent = getIntent();
         Uri uri = null;
@@ -59,6 +69,7 @@ public class ImportIndividualStickerActivity extends BaseActivity {
     }
 
     private void extractAndShow(Uri uri) {
+        if (statusText != null) statusText.setText(R.string.importing_pack);
         WeakReference<ImportIndividualStickerActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
             ImportIndividualStickerActivity activity = ref.get();
@@ -214,6 +225,12 @@ public class ImportIndividualStickerActivity extends BaseActivity {
     }
 
     private void runAddSticker(ExtractResult result, String identifier, boolean createNew) {
+        if (progressBar != null) {
+            progressBar.setIndeterminate(false);
+            progressBar.setMax(result.webpFiles.size());
+            progressBar.setProgressCompat(0, true);
+        }
+        
         WeakReference<ImportIndividualStickerActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
             ImportIndividualStickerActivity activity = ref.get();
@@ -224,13 +241,18 @@ public class ImportIndividualStickerActivity extends BaseActivity {
                     if (!result.webpFiles.isEmpty()) {
                         String newId = WastickerParser.createPackWithSticker(
                                 activity, result.defaultTitle, result.defaultAuthor, result.webpFiles.get(0));
+                        updateStatus(1, result.webpFiles.size());
                         for (int i = 1; i < result.webpFiles.size(); i++) {
                             WastickerParser.addWebpStickerToPack(activity, newId, result.webpFiles.get(i));
+                            updateStatus(i + 1, result.webpFiles.size());
                         }
                     }
                 } else {
+                    int count = 0;
                     for (File webpFile : result.webpFiles) {
                         WastickerParser.addWebpStickerToPack(activity, identifier, webpFile);
+                        count++;
+                        updateStatus(count, result.webpFiles.size());
                     }
                 }
                 
@@ -254,6 +276,13 @@ public class ImportIndividualStickerActivity extends BaseActivity {
                 }
                 act.finish();
             });
+        });
+    }
+
+    private void updateStatus(int current, int total) {
+        mainHandler.post(() -> {
+            if (progressBar != null) progressBar.setProgressCompat(current, true);
+            if (statusText != null) statusText.setText(getString(R.string.import_progress, current, total));
         });
     }
 

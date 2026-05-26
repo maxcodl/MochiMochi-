@@ -21,12 +21,30 @@
             app:titleTextColor="?attr/colorOnSurface"
             tools:title="Sticker Pack Details" />
 
-        <com.google.android.material.progressindicator.LinearProgressIndicator
-            android:id="@+id/details_progress_bar"
+        <LinearLayout
+            android:id="@+id/details_progress_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:indeterminate="true"
-            android:visibility="gone" />
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/details_progress_bar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:indeterminate="true"
+                app:trackCornerRadius="0dp" />
+
+            <TextView
+                android:id="@+id/details_progress_status_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="4dp"
+                android:textAppearance="?attr/textAppearanceLabelSmall"
+                android:textColor="?attr/colorPrimary"
+                tools:text="Adding part 1 of 3 to WhatsApp..." />
+        </LinearLayout>
 
     </com.google.android.material.appbar.AppBarLayout>
 

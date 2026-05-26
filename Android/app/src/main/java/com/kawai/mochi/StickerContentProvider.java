@@ -305,6 +305,8 @@ public class StickerContentProvider extends ContentProvider {
                             return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");
                         }
                     }
+                    AssetFileDescriptor fallback = tryFetchChunkTrayFallback(context, root, identifier, fileName);
+                    if (fallback != null) return fallback;
                 }
             } catch (Exception e) { Log.e("StickerCP", "SAF fetch failed", e); }
         } else {
@@ -313,6 +315,8 @@ public class StickerContentProvider extends ContentProvider {
                 if (userFile.exists()) {
                     return new AssetFileDescriptor(ParcelFileDescriptor.open(userFile, ParcelFileDescriptor.MODE_READ_ONLY), 0, userFile.length());
                 }
+                AssetFileDescriptor fallback = tryFetchChunkTrayFallback(folderPath, identifier, fileName);
+                if (fallback != null) return fallback;
             } catch (IOException ignored) {}
         }
 
@@ -328,4 +332,59 @@ public class StickerContentProvider extends ContentProvider {
     @Override public int delete(@NonNull Uri uri, @Nullable String s, String[] sa) { throw new UnsupportedOperationException(); }
     @Override public Uri insert(@NonNull Uri uri, ContentValues v) { throw new UnsupportedOperationException(); }
     @Override public int update(@NonNull Uri uri, ContentValues v, String s, String[] sa) { throw new UnsupportedOperationException(); }
+
+    @Nullable
+    private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull Context context, @NonNull DocumentFile root,
+                                                         @NonNull String identifier, @NonNull String fileName) {
+        if (!isChunkIdentifier(identifier)) return null;
+        if (!fileName.equals(getTrayFileNameForIdentifier(identifier))) return null;
+
+        String originalId = getOriginalIdentifier(identifier);
+        if (originalId == null) return null;
+
+        DocumentFile packDir = root.findFile(originalId);
+        if (packDir == null) return null;
+        DocumentFile file = packDir.findFile(fileName);
+        if (file == null) return null;
+        try {
+            return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");
+        } catch (FileNotFoundException e) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull String folderPath,
+                                                         @NonNull String identifier, @NonNull String fileName) {
+        if (!isChunkIdentifier(identifier)) return null;
+        if (!fileName.equals(getTrayFileNameForIdentifier(identifier))) return null;
+
+        String originalId = getOriginalIdentifier(identifier);
+        if (originalId == null) return null;
+        File userFile = new File(new File(folderPath, originalId), fileName);
+        if (!userFile.exists()) return null;
+        try {
+            return new AssetFileDescriptor(ParcelFileDescriptor.open(userFile, ParcelFileDescriptor.MODE_READ_ONLY), 0, userFile.length());
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private boolean isChunkIdentifier(@NonNull String identifier) {
+        return identifier.contains(StickerPackChunkManager.CHUNK_SUFFIX);
+    }
+
+    @Nullable
+    private String getOriginalIdentifier(@NonNull String identifier) {
+        int idx = identifier.indexOf(StickerPackChunkManager.CHUNK_SUFFIX);
+        if (idx <= 0) return null;
+        return identifier.substring(0, idx);
+    }
+
+    @NonNull
+    private String getTrayFileNameForIdentifier(@NonNull String identifier) {
+        StickerPack pack = getStickerPackMap().get(identifier);
+        if (pack != null && !TextUtils.isEmpty(pack.trayImageFile)) return pack.trayImageFile;
+        return "tray.png";
+    }
 }

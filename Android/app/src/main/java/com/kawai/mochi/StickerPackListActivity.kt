@@ -9,6 +9,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.Button
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,7 +42,10 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private var migrationJob: Job? = null
     private lateinit var itemTouchHelper: ItemTouchHelper
+    
+    private var importProgressContainer: View? = null
     private var importProgressBar: LinearProgressIndicator? = null
+    private var importStatusText: TextView? = null
 
     private val telegramImportLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -79,13 +83,24 @@ class StickerPackListActivity : AddStickerPackActivity() {
         }
     }
 
-    override fun showProgressBar() {
+    override fun showProgressBar(message: String?) {
+        importProgressContainer?.visibility = View.VISIBLE
         importProgressBar?.isIndeterminate = true
-        importProgressBar?.visibility = View.VISIBLE
+        importStatusText?.text = message ?: getString(R.string.add_to_whatsapp)
     }
 
     override fun hideProgressBar() {
-        importProgressBar?.visibility = View.GONE
+        importProgressContainer?.visibility = View.GONE
+    }
+
+    override fun updateProgress(current: Int, total: Int, message: String?) {
+        importProgressContainer?.visibility = View.VISIBLE
+        importProgressBar?.isIndeterminate = false
+        importProgressBar?.max = total
+        importProgressBar?.setProgressCompat(current, true)
+        if (message != null) {
+            importStatusText?.text = message
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,7 +114,10 @@ class StickerPackListActivity : AddStickerPackActivity() {
         packRecyclerView = findViewById(R.id.sticker_pack_list)
         emptyStateLayout = findViewById(R.id.empty_state_layout)
         importFab = findViewById(R.id.import_button_fab)
+        
+        importProgressContainer = findViewById(R.id.import_progress_container)
         importProgressBar = findViewById(R.id.import_progress_bar)
+        importStatusText = findViewById(R.id.import_status_text)
 
         val intentList = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableArrayListExtra(EXTRA_STICKER_PACK_LIST_DATA, StickerPack::class.java)
@@ -275,17 +293,19 @@ class StickerPackListActivity : AddStickerPackActivity() {
     }
 
     private fun importWastickerFile(uri: Uri) {
-        importProgressBar?.isIndeterminate = false
-        importProgressBar?.progress = 0
-        importProgressBar?.visibility = View.VISIBLE
+        importProgressContainer?.visibility = View.VISIBLE
+        importProgressBar?.isIndeterminate = true
+        importStatusText?.setText(R.string.importing_pack)
         
         lifecycleScope.launch {
             try {
                 val imported = withContext(Dispatchers.IO) {
                     val importedId = WastickerParser.importStickerPack(this@StickerPackListActivity, uri) { current, total ->
                         runOnUiThread {
+                            importProgressBar?.isIndeterminate = false
                             importProgressBar?.max = total
-                            importProgressBar?.setProgress(current, true)
+                            importProgressBar?.setProgressCompat(current, true)
+                            importStatusText?.text = getString(R.string.import_progress, current, total)
                         }
                     }
                     StickerContentProvider.getInstance()?.invalidateStickerPackList()
@@ -321,7 +341,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
             } catch (e: Exception) {
                 Toast.makeText(this@StickerPackListActivity, getString(R.string.import_error, e.message), Toast.LENGTH_LONG).show()
             } finally {
-                importProgressBar?.visibility = View.GONE
+                importProgressContainer?.visibility = View.GONE
             }
         }
     }

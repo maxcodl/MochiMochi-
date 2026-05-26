@@ -24,12 +24,31 @@
             app:titleTextColor="?attr/colorOnSurface"
             tools:title="@string/app_name" />
 
-        <com.google.android.material.progressindicator.LinearProgressIndicator
-            android:id="@+id/import_progress_bar"
+        <LinearLayout
+            android:id="@+id/import_progress_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:indeterminate="true"
-            android:visibility="gone" />
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/import_progress_bar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:indeterminate="true"
+                app:trackCornerRadius="0dp" />
+
+            <TextView
+                android:id="@+id/import_status_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="4dp"
+                android:text="@string/importing_pack"
+                android:textAppearance="?attr/textAppearanceLabelSmall"
+                android:textColor="?attr/colorPrimary"
+                tools:text="Importing sticker 5 of 30..." />
+        </LinearLayout>
 
     </com.google.android.material.appbar.AppBarLayout>
 

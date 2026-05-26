@@ -1,6 +1,5 @@
 package com.kawai.mochi;
 
-import android.app.ProgressDialog;
 import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
@@ -20,6 +19,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
@@ -46,12 +46,12 @@ public class MergeStickerPacksActivity extends BaseActivity {
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private List<StickerPack> allPacks = new ArrayList<>();
-    private final boolean[] selected = new boolean[0]; // sized lazily after load
     private boolean[] selectedMemo;
 
     private TextView countView;
     private TextView overLimitLabel;
     private ExtendedFloatingActionButton mergeButton;
+    private LinearProgressIndicator progressBar;
     private MergePackAdapter adapter;
 
     // -------------------------------------------------------------------------
@@ -72,6 +72,7 @@ public class MergeStickerPacksActivity extends BaseActivity {
         countView     = findViewById(R.id.merge_sticker_count);
         overLimitLabel = findViewById(R.id.merge_over_limit_label);
         mergeButton   = findViewById(R.id.merge_button);
+        progressBar   = findViewById(R.id.merge_progress_bar);
 
         RecyclerView recycler = findViewById(R.id.merge_pack_list);
         recycler.setLayoutManager(new LinearLayoutManager(this));
@@ -208,21 +209,29 @@ public class MergeStickerPacksActivity extends BaseActivity {
                 .show();
     }
 
-    @SuppressWarnings("deprecation")
     private void executeMerge(List<Integer> indices) {
         List<StickerPack> packsToMerge = new ArrayList<>();
         for (int i : indices) packsToMerge.add(allPacks.get(i));
 
-        ProgressDialog progress = new ProgressDialog(this);
-        progress.setMessage(getString(R.string.merge_in_progress));
-        progress.setCancelable(false);
-        progress.show();
+        if (progressBar != null) {
+            progressBar.setIndeterminate(false);
+            progressBar.setProgress(0);
+            progressBar.setVisibility(View.VISIBLE);
+        }
+        mergeButton.setEnabled(false);
 
         WeakReference<MergeStickerPacksActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
             String error = null;
             try {
-                WastickerParser.mergeStickerPacks(ref.get(), packsToMerge, MAX_STICKERS);
+                WastickerParser.mergeStickerPacks(ref.get(), packsToMerge, MAX_STICKERS, (current, total) -> {
+                    mainHandler.post(() -> {
+                        if (ref.get() != null && ref.get().progressBar != null) {
+                            ref.get().progressBar.setMax(total);
+                            ref.get().progressBar.setProgress(current, true);
+                        }
+                    });
+                });
                 StickerContentProvider provider = StickerContentProvider.getInstance();
                 if (provider != null) provider.invalidateStickerPackList();
             } catch (Exception e) {
@@ -230,9 +239,11 @@ public class MergeStickerPacksActivity extends BaseActivity {
             }
             final String finalError = error;
             mainHandler.post(() -> {
-                if (progress.isShowing()) progress.dismiss();
                 MergeStickerPacksActivity act = ref.get();
                 if (act == null) return;
+                if (act.progressBar != null) act.progressBar.setVisibility(View.GONE);
+                act.mergeButton.setEnabled(true);
+
                 if (finalError != null) {
                     Toast.makeText(act, act.getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                 } else {

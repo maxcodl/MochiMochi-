@@ -71,7 +71,7 @@ public class EntryActivity extends BaseActivity {
     }
 
     private void showStickerPack(ArrayList<StickerPack> stickerPackList) {
-        progressBar.setVisibility(View.GONE);
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
         // Always go to list screen
         final Intent intent = new Intent(this, StickerPackListActivity.class);
         intent.putParcelableArrayListExtra(StickerPackListActivity.EXTRA_STICKER_PACK_LIST_DATA, stickerPackList);
@@ -81,7 +81,7 @@ public class EntryActivity extends BaseActivity {
     }
 
     private void showErrorMessage(String errorMessage) {
-        progressBar.setVisibility(View.GONE);
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
         Log.e("EntryActivity", "error fetching sticker packs, " + errorMessage);
         
         if (errorMessageText != null) {
@@ -156,7 +156,7 @@ public class EntryActivity extends BaseActivity {
                         if (activity.progressBar != null) {
                             activity.progressBar.setIndeterminate(false);
                             activity.progressBar.setMax(total);
-                            activity.progressBar.setProgress(current, true);
+                            activity.progressBar.setProgressCompat(current, true);
                         }
                     });
                 });
